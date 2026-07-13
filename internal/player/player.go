@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -84,7 +85,20 @@ func (p *Player) startEventLoop() {
 			// discard event string for now
 			_ = scanner.Text()
 		}
+		if err := scanner.Err(); err != nil {
+			if !isClosedConnectionError(err) {
+				fmt.Fprintf(os.Stderr, "mpv ipc scanner error: %v\n", err)
+			}
+		}
 	}()
+}
+
+// isClosedConnectionError checks if an error is due to the connection being closed
+func isClosedConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return err.Error() == "use of closed network connection" || err == net.ErrClosed || strings.Contains(err.Error(), "use of closed network connection")
 }
 
 // Close stops the mpv instance and closes the IPC connection.
@@ -102,7 +116,7 @@ func (p *Player) Close() error {
 		// Wait briefly for graceful shutdown, then force kill
 		done := make(chan error, 1)
 		go func() { done <- p.cmd.Wait() }()
-		
+
 		select {
 		case <-done:
 		case <-time.After(500 * time.Millisecond):
@@ -154,4 +168,3 @@ func (p *Player) Play() error {
 func (p *Player) Stop() error {
 	return p.sendCommand("stop")
 }
-
