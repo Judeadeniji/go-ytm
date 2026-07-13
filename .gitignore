@@ -1,0 +1,21 @@
+# Binaries
+/ytm-tui
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Downloads cache
+/downloads/*
+!/downloads/.gitkeep
+
+# OS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.swp
