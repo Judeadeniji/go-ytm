@@ -236,7 +236,10 @@ func (p *Player) Close() error {
 		case <-done:
 		case <-time.After(800 * time.Millisecond):
 			_ = p.cmd.Process.Kill()
-			<-done
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
 		}
 	}
 

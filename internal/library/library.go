@@ -47,7 +47,7 @@ func Open() (*DB, error) {
 
 // OpenPath opens the library database at path.
 func OpenPath(path string) (*DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	sqlDB, err := sql.Open("sqlite", path)
@@ -55,6 +55,8 @@ func OpenPath(path string) (*DB, error) {
 		return nil, err
 	}
 	sqlDB.SetMaxOpenConns(1)
+	// Tighten perms on the DB file (created by sqlite with umask).
+	_ = os.Chmod(path, 0o600)
 	db := &DB{sql: sqlDB, path: path}
 	if err := db.migrate(); err != nil {
 		_ = sqlDB.Close()

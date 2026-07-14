@@ -26,9 +26,19 @@ func NewExtractor() *Extractor {
 
 // GetStreamURL attempts to get the stream URL, falling back to yt-dlp if it fails
 func (e *Extractor) GetStreamURL(ctx context.Context, videoID string) (string, error) {
-	url, primaryErr := e.getStreamURLYoutubeClient(videoID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	url, primaryErr := e.getStreamURLYoutubeClient(ctx, videoID)
 	if primaryErr == nil && url != "" {
 		return url, nil
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
 	}
 
 	url, fallbackErr := e.getStreamURLYtDlp(ctx, videoID)
@@ -54,26 +64,42 @@ func isNotFound(err error) bool {
 	return errors.As(err, &e) && e.Err == exec.ErrNotFound
 }
 
-func (e *Extractor) getStreamURLYoutubeClient(videoID string) (string, error) {
-	video, err := e.client.GetVideo(videoID)
-	if err != nil {
-		return "", err
+func (e *Extractor) getStreamURLYoutubeClient(ctx context.Context, videoID string) (string, error) {
+	type result struct {
+		url string
+		err error
 	}
+	ch := make(chan result, 1)
+	go func() {
+		video, err := e.client.GetVideo(videoID)
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
 
-	formats := video.Formats.WithAudioChannels()
-	if len(formats) == 0 {
-		return "", fmt.Errorf("no audio formats found")
+		formats := video.Formats.WithAudioChannels()
+		if len(formats) == 0 {
+			ch <- result{err: fmt.Errorf("no audio formats found")}
+			return
+		}
+
+		// Sort formats to get the best audio quality
+		formats.Sort()
+
+		streamURL, err := e.client.GetStreamURL(video, &formats[0])
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
+		ch <- result{url: streamURL}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-ch:
+		return r.url, r.err
 	}
-
-	// Sort formats to get the best audio quality
-	formats.Sort()
-
-	streamURL, err := e.client.GetStreamURL(video, &formats[0])
-	if err != nil {
-		return "", err
-	}
-
-	return streamURL, nil
 }
 
 func (e *Extractor) getStreamURLYtDlp(ctx context.Context, videoID string) (string, error) {

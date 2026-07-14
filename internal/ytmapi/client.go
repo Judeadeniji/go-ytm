@@ -1,6 +1,7 @@
 package ytmapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,9 +25,16 @@ func NewClient() *Client {
 	}
 }
 
-func (c *Client) getJSON(path string, out any) error {
+func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	u := c.baseURL + path
-	resp, err := c.httpClient.Get(u)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return fmt.Errorf("ytm-api request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ytm-api unreachable: %w", err)
 	}
@@ -66,11 +74,11 @@ type searchResponse struct {
 	Results []SearchResult `json:"results"`
 }
 
-func (c *Client) Search(query string) ([]SearchResult, error) {
-	return c.SearchFiltered(query, "", 20)
+func (c *Client) Search(ctx context.Context, query string) ([]SearchResult, error) {
+	return c.SearchFiltered(ctx, query, "", 20)
 }
 
-func (c *Client) SearchFiltered(query, filter string, limit int) ([]SearchResult, error) {
+func (c *Client) SearchFiltered(ctx context.Context, query, filter string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -81,7 +89,7 @@ func (c *Client) SearchFiltered(query, filter string, limit int) ([]SearchResult
 		q.Set("filter", filter)
 	}
 	var data searchResponse
-	if err := c.getJSON("/search?"+q.Encode(), &data); err != nil {
+	if err := c.getJSON(ctx, "/search?"+q.Encode(), &data); err != nil {
 		return nil, err
 	}
 	return data.Results, nil
@@ -91,12 +99,12 @@ type suggestionsResponse struct {
 	Suggestions []SearchSuggestionItem `json:"suggestions"`
 }
 
-func (c *Client) GetSearchSuggestions(query string) ([]SearchSuggestionItem, error) {
+func (c *Client) GetSearchSuggestions(ctx context.Context, query string) ([]SearchSuggestionItem, error) {
 	if query == "" {
 		return []SearchSuggestionItem{}, nil
 	}
 	var data suggestionsResponse
-	if err := c.getJSON("/suggestions?q="+url.QueryEscape(query), &data); err != nil {
+	if err := c.getJSON(ctx, "/suggestions?q="+url.QueryEscape(query), &data); err != nil {
 		return nil, err
 	}
 	return data.Suggestions, nil
@@ -106,17 +114,17 @@ type homeResponse struct {
 	Carousels []HomeCarousel `json:"carousels"`
 }
 
-func (c *Client) GetHome() ([]HomeCarousel, error) {
+func (c *Client) GetHome(ctx context.Context) ([]HomeCarousel, error) {
 	var data homeResponse
-	if err := c.getJSON("/home?limit=20", &data); err != nil {
+	if err := c.getJSON(ctx, "/home?limit=20", &data); err != nil {
 		return nil, err
 	}
 	return data.Carousels, nil
 }
 
-func (c *Client) GetArtist(channelID string) (*ArtistPage, error) {
+func (c *Client) GetArtist(ctx context.Context, channelID string) (*ArtistPage, error) {
 	var data ArtistPage
-	if err := c.getJSON("/artist/"+url.PathEscape(channelID), &data); err != nil {
+	if err := c.getJSON(ctx, "/artist/"+url.PathEscape(channelID), &data); err != nil {
 		return nil, err
 	}
 	return &data, nil
@@ -126,7 +134,7 @@ type artistAlbumsResponse struct {
 	Albums []ArtistAlbum `json:"albums"`
 }
 
-func (c *Client) GetArtistAlbums(channelID, params string, limit int) ([]ArtistAlbum, error) {
+func (c *Client) GetArtistAlbums(ctx context.Context, channelID, params string, limit int) ([]ArtistAlbum, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -135,15 +143,15 @@ func (c *Client) GetArtistAlbums(channelID, params string, limit int) ([]ArtistA
 	q.Set("limit", fmt.Sprintf("%d", limit))
 	var data artistAlbumsResponse
 	path := "/artist/" + url.PathEscape(channelID) + "/albums?" + q.Encode()
-	if err := c.getJSON(path, &data); err != nil {
+	if err := c.getJSON(ctx, path, &data); err != nil {
 		return nil, err
 	}
 	return data.Albums, nil
 }
 
-func (c *Client) GetAlbum(browseID string) (*AlbumPage, error) {
+func (c *Client) GetAlbum(ctx context.Context, browseID string) (*AlbumPage, error) {
 	var data AlbumPage
-	if err := c.getJSON("/album/"+url.PathEscape(browseID), &data); err != nil {
+	if err := c.getJSON(ctx, "/album/"+url.PathEscape(browseID), &data); err != nil {
 		return nil, err
 	}
 	return &data, nil
@@ -153,29 +161,29 @@ type albumBrowseIDResponse struct {
 	BrowseID string `json:"browseId"`
 }
 
-func (c *Client) GetAlbumBrowseID(audioPlaylistID string) (string, error) {
+func (c *Client) GetAlbumBrowseID(ctx context.Context, audioPlaylistID string) (string, error) {
 	q := url.Values{}
 	q.Set("audioPlaylistId", audioPlaylistID)
 	var data albumBrowseIDResponse
-	if err := c.getJSON("/album/browse-id?"+q.Encode(), &data); err != nil {
+	if err := c.getJSON(ctx, "/album/browse-id?"+q.Encode(), &data); err != nil {
 		return "", err
 	}
 	return data.BrowseID, nil
 }
 
-func (c *Client) GetPlaylist(playlistID string, limit int) (*PlaylistPage, error) {
+func (c *Client) GetPlaylist(ctx context.Context, playlistID string, limit int) (*PlaylistPage, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	path := fmt.Sprintf("/playlist/%s?limit=%d", url.PathEscape(playlistID), limit)
 	var data PlaylistPage
-	if err := c.getJSON(path, &data); err != nil {
+	if err := c.getJSON(ctx, path, &data); err != nil {
 		return nil, err
 	}
 	return &data, nil
 }
 
-func (c *Client) GetWatchPlaylist(videoID, playlistID string, radio bool, limit int) (*WatchPlaylist, error) {
+func (c *Client) GetWatchPlaylist(ctx context.Context, videoID, playlistID string, radio bool, limit int) (*WatchPlaylist, error) {
 	if limit <= 0 {
 		limit = 25
 	}
@@ -191,7 +199,7 @@ func (c *Client) GetWatchPlaylist(videoID, playlistID string, radio bool, limit 
 	}
 	q.Set("limit", fmt.Sprintf("%d", limit))
 	var data WatchPlaylist
-	if err := c.getJSON("/watch?"+q.Encode(), &data); err != nil {
+	if err := c.getJSON(ctx, "/watch?"+q.Encode(), &data); err != nil {
 		return nil, err
 	}
 	return &data, nil
