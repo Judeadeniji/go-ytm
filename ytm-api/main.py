@@ -4,6 +4,13 @@ from ytmusicapi import YTMusic
 app = FastAPI()
 ytmusic = YTMusic()
 
+
+@app.get("/health")
+def health():
+    """Liveness check used by the make run bootstrap."""
+    return {"ok": True}
+
+
 @app.get("/search")
 def search(q: str = Query(..., description="The search query")):
     """

@@ -12,12 +12,13 @@ GOARCH ?= $(shell go env GOARCH)
 # Require pure Go, no cgo for SQLite cross-compilation (modernc.org/sqlite)
 CGO_ENABLED ?= 0
 GO := go
+YTM_API_PORT ?= 8000
 
 # Build flags
 LDFLAGS := -s -w
 BUILD_FLAGS := -trimpath -ldflags="$(LDFLAGS)"
 
-.PHONY: all build run test lint fmt tidy clean air
+.PHONY: all build run test lint fmt tidy clean air api-stop
 
 # Default target
 all: tidy fmt lint test build
@@ -27,9 +28,22 @@ build:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build $(BUILD_FLAGS) -o $(OUTPUT) $(ENTRY)
 
+# Bootstraps ytm-api (Python), verifies mpv, then runs the TUI.
+# mpv itself is started by the Go app over IPC — not as a separate Makefile step.
 run: build
-	@echo "==> Running $(APP_NAME)..."
-	./$(OUTPUT)
+	@chmod +x scripts/run.sh
+	@YTM_API_PORT=$(YTM_API_PORT) ./scripts/run.sh ./$(OUTPUT)
+
+# Stop a leftover ytm-api from a previous run (if any).
+api-stop:
+	@if [ -f tmp/ytm-api.pid ]; then \
+		pid=$$(cat tmp/ytm-api.pid); \
+		kill $$pid 2>/dev/null || true; \
+		rm -f tmp/ytm-api.pid; \
+		echo "==> Stopped ytm-api (pid $$pid)"; \
+	else \
+		echo "==> No ytm-api pidfile found"; \
+	fi
 
 test:
 	@echo "==> Running tests..."
