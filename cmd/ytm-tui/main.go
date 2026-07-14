@@ -5,14 +5,25 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/judeadeniji/go-ytm/internal/player"
+	"github.com/judeadeniji/go-ytm/internal/search"
 	"github.com/judeadeniji/go-ytm/internal/tui"
 )
 
 func main() {
-	m := tui.NewModel()
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p, err := player.NewPlayer()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting MPV player: %v\n", err)
+		os.Exit(1)
+	}
+	defer p.Close()
 
-	if _, err := p.Run(); err != nil {
+	ext := search.NewExtractor()
+
+	m := tui.NewModel(p, ext)
+	prog := tea.NewProgram(m, tea.WithAltScreen())
+
+	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
 		os.Exit(1)
 	}

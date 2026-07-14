@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/player"
+	"github.com/judeadeniji/go-ytm/internal/search"
 )
 
 // YouTube Music strict dark theme colors
@@ -38,6 +42,7 @@ type AlbumCard struct {
 	Title    string
 	Subtitle string
 	ArtColor lipgloss.Color
+	VideoID  string
 }
 
 type Model struct {
@@ -59,12 +64,53 @@ type Model struct {
 	
 	mainViewport    viewport.Model
 	carouselOffsets map[string]int
+	searchInput     textinput.Model
+	
+	player    *player.Player
+	extractor *search.Extractor
+	statusMsg string
 }
 
-func NewModel() Model {
+type StreamURLMsg struct {
+	URL string
+	Err error
+}
+
+func fetchStreamURL(ext *search.Extractor, videoID string) tea.Cmd {
+	return func() tea.Msg {
+		url, err := ext.GetStreamURL(context.Background(), videoID)
+		return StreamURLMsg{URL: url, Err: err}
+	}
+}
+
+func stopPlayback(p *player.Player) tea.Cmd {
+	return func() tea.Msg {
+		p.Stop()
+		return nil
+	}
+}
+
+func loadAndPlay(p *player.Player, url string) tea.Cmd {
+	return func() tea.Msg {
+		p.Load(url)
+		p.Play()
+		return nil
+	}
+}
+
+func NewModel(p *player.Player, ext *search.Extractor) Model {
 	// Pre-render the image once at startup! 
 	// Decoding and resizing PNGs on every frame in View() causes massive lag.
 	artStr := RenderLocalImage(".build_assets/2026-07-14_05-43.png", 24, 10)
+
+	// Initialize interactive search input
+	ti := textinput.New()
+	ti.Placeholder = "Search songs, albums, artists, podcasts"
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorSubtext)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(colorText)
+	ti.Cursor.Style = lipgloss.NewStyle().Foreground(colorText)
+	ti.CharLimit = 156
+	ti.Width = 56 // Leave room for padding
 
 	return Model{
 		activePane: PaneMain,
@@ -80,32 +126,36 @@ func NewModel() Model {
 		},
 		filters: []string{"Podcasts", "Energize", "Workout", "Relax", "Commute", "Feel good", "Sad", "Romance", "Party", "Sleep", "Focus"},
 		listenAgain: []AlbumCard{
-			{"HOLD SOMETHING", "Album • Islambo", colorCardArt[0]},
-			{"Nep's Storybook", "Album • nep", colorCardArt[1]},
-			{"TikTok Songs", "Oluwaferanmi A.J", colorCardArt[2]},
-			{"Ca$ino", "Album • Baby Keem", colorCardArt[3]},
-			{"Mr. Morale & The Big..", "Album • Kendrick Lamar", colorCardArt[4]},
-			{"The Slim Shady LP", "Album • Eminem", colorCardArt[5]},
+			{"HOLD SOMETHING", "Album • Islambo", colorCardArt[0], ""},
+			{"Nep's Storybook", "Album • nep", colorCardArt[1], ""},
+			{"TikTok Songs", "Oluwaferanmi A.J", colorCardArt[2], ""},
+			{"Ca$ino", "Album • Baby Keem", colorCardArt[3], ""},
+			{"Mr. Morale & The Big..", "Album • Kendrick Lamar", colorCardArt[4], ""},
+			{"The Slim Shady LP", "Album • Eminem", colorCardArt[5], ""},
 		},
 		albumsForYou: []AlbumCard{
-			{"Black Hippy 2", "Album • Black Hippy", colorCardArt[4]},
-			{"Typical of Me EP", "EP • Laufey", colorCardArt[5]},
-			{"Tha Carter IV", "Album • Lil Wayne", colorCardArt[0]},
-			{"Legend Or No Legend", "Album • Wande Coal", colorCardArt[1]},
-			{"PSYCHODRAMA", "Album • Dave", colorCardArt[2]},
-			{"Young Preacher", "Album • Blaqbonez", colorCardArt[3]},
+			{"Black Hippy 2", "Album • Black Hippy", colorCardArt[4], ""},
+			{"Typical of Me EP", "EP • Laufey", colorCardArt[5], ""},
+			{"Tha Carter IV", "Album • Lil Wayne", colorCardArt[0], ""},
+			{"Legend Or No Legend", "Album • Wande Coal", colorCardArt[1], ""},
+			{"PSYCHODRAMA", "Album • Dave", colorCardArt[2], ""},
+			{"Young Preacher", "Album • Blaqbonez", colorCardArt[3], ""},
 		},
 		forgottenFavorites: []AlbumCard{
-			{"The Off-Season", "Album • J. Cole", colorCardArt[3]},
-			{"Friday Night Lights", "Album • J. Cole", colorCardArt[4]},
-			{"GNX", "Album • Kendrick Lamar", colorCardArt[5]},
-			{"999", "Album • Olamide", colorCardArt[0]},
-			{"Lungu Boy", "Album • Asake", colorCardArt[1]},
-			{"The Fall-Off", "Album • J. Cole", colorCardArt[2]},
+			{"The Off-Season", "Album • J. Cole", colorCardArt[3], ""},
+			{"Friday Night Lights", "Album • J. Cole", colorCardArt[4], ""},
+			{"GNX", "Album • Kendrick Lamar", colorCardArt[5], ""},
+			{"999", "Album • Olamide", colorCardArt[0], ""},
+			{"Lungu Boy", "Album • Asake", colorCardArt[1], ""},
+			{"The Fall-Off", "Album • J. Cole", colorCardArt[2], ""},
 		},
 		cachedArt:       artStr,
 		mainViewport:    viewport.New(0, 0),
 		carouselOffsets: map[string]int{"Listen again": 0, "Albums for you": 0, "Forgotten favorites": 0},
+		searchInput:     ti,
+		player:          p,
+		extractor:       ext,
+		statusMsg:       "Ready",
 	}
 }
 
@@ -129,9 +179,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 		
 	case tea.KeyMsg:
+		// If the search bar is focused, hijack keyboard events
+		if m.searchInput.Focused() {
+			switch msg.String() {
+			case "enter":
+				m.statusMsg = "Searching for: " + m.searchInput.Value()
+				m.searchInput.Blur()
+				return m, nil
+			case "esc":
+				m.searchInput.Blur()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "/":
+			m.searchInput.Focus()
+			return m, textinput.Blink
+		case "p":
+			m.statusMsg = "Loading audio..."
+			// Proof of concept: Fetch "Not Like Us" by Kendrick Lamar
+			return m, fetchStreamURL(m.extractor, "T6eK-2OQtew")
+		case "s":
+			m.statusMsg = "Stopped playback"
+			return m, stopPlayback(m.player)
 		case "right":
 			// Scroll carousels right
 			if m.carouselOffsets["Listen again"] < len(m.listenAgain)-1 { m.carouselOffsets["Listen again"]++ }
@@ -161,6 +237,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 		// Pass key events to viewport for scrolling
 		m.mainViewport, cmd = m.mainViewport.Update(msg)
+	case StreamURLMsg:
+		if msg.Err != nil {
+			m.statusMsg = fmt.Sprintf("Error: %v", msg.Err)
+			return m, nil
+		}
+		
+		m.statusMsg = "Playing audio!"
+		return m, loadAndPlay(m.player, msg.URL)
 	}
 	
 	// Pass other events to viewport (e.g. mouse wheel)
@@ -242,21 +326,12 @@ func (m Model) View() string {
 
 	searchBox := lipgloss.NewStyle().
 		Background(colorSearchBg).
-		Foreground(colorSubtext).
+		Foreground(colorText).
 		Padding(0, 2).Width(searchWidth).
-		Render("Search songs, albums, artists, podcasts")
+		Render(m.searchInput.View())
 
 	profileIcon := lipgloss.NewStyle().Background(colorDivider).Foreground(colorText).Render(" AJ ")
 
-	// Layout search centered and profile on right
-	rightPadding := searchPadding - 6
-	if rightPadding < 0 {
-		rightPadding = 0
-	}
-	headerContent := fmt.Sprintf("%s%s%s", 
-		strings.Repeat(" ", searchPadding), 
-		searchBox,
-		strings.Repeat(" ", rightPadding) + profileIcon) // Rough padding to put profile on right
 	
 	header := lipgloss.NewStyle().
 		Background(colorBg).Foreground(colorText).
