@@ -543,31 +543,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Kick off any newly-visible thumbs after layout settled.
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case SearchSuggestionsMsg:
-		if msg.Err == nil {
-			var sugs []SearchSuggestion
-			for _, s := range msg.Suggestions {
-				sugs = append(sugs, SearchSuggestion{
-					Type:        SuggestionQuery,
-					Text:        s.Text,
-					Runs:        s.Runs,
-					FromHistory: s.FromHistory,
-				})
-			}
-			m.searchSuggestions = sugs
+		// Ignore stale responses from older keystrokes.
+		if msg.Query != "" && msg.Query != m.searchInput.Value() {
+			return m, nil
 		}
-		return m, nil
+		if msg.Err != nil {
+			m.statusMsg = "Suggestions unavailable"
+			return m, nil
+		}
+		m.searchSuggestions = buildSuggestionList(msg)
+		if m.listCursor >= len(m.searchSuggestions) {
+			m.listCursor = 0
+		}
+		return m, m.enqueueSuggestionImages()
 	}
 
 	// Pass other events to viewport (e.g. mouse wheel/clicks)
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		if m.searchInput.Focused() && mouseMsg.Type == tea.MouseLeft {
-			for i, s := range m.searchSuggestions {
+			for i := range m.searchSuggestions {
 				if m.zone.Get(fmt.Sprintf("suggestion_%d", i)).InBounds(mouseMsg) {
-					m.searchInput.SetValue(s.Text)
-					m.lastSearchQuery = s.Text
-					m.statusMsg = "Searching for: " + s.Text
-					m.searchInput.Blur()
-					return m, doSearchFiltered(m.ytmapiClient, s.Text, m.searchFilter)
+					m.listCursor = i
+					return m.activateSuggestion()
 				}
 			}
 		}

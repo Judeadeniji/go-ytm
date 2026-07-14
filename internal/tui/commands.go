@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -113,13 +114,31 @@ func doSearch(apiClient *ytmapi.Client, query string) tea.Cmd {
 
 type SearchSuggestionsMsg struct {
 	Suggestions []ytmapi.SearchSuggestionItem
+	Results     []ytmapi.SearchResult
+	Query       string
 	Err         error
 }
 
 func fetchSuggestions(apiClient *ytmapi.Client, query string) tea.Cmd {
 	return func() tea.Msg {
-		suggestions, err := apiClient.GetSearchSuggestions(query)
-		return SearchSuggestionsMsg{Suggestions: suggestions, Err: err}
+		q := strings.TrimSpace(query)
+		if q == "" {
+			return SearchSuggestionsMsg{Query: query}
+		}
+		sugs, err := apiClient.GetSearchSuggestions(q)
+		results, searchErr := apiClient.SearchFiltered(q, "", 5)
+		if err != nil && searchErr != nil {
+			return SearchSuggestionsMsg{Query: query, Err: err}
+		}
+		if err != nil {
+			err = nil // still show search hits
+		}
+		return SearchSuggestionsMsg{
+			Suggestions: sugs,
+			Results:     results,
+			Query:       query,
+			Err:         err,
+		}
 	}
 }
 

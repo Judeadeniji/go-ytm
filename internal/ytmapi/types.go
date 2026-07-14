@@ -36,9 +36,10 @@ type SearchResult struct {
 }
 
 type SearchSuggestionItem struct {
-	Text        string          `json:"text"`
-	Runs        []SuggestionRun `json:"runs,omitempty"`
-	FromHistory bool            `json:"fromHistory,omitempty"`
+	Text          string          `json:"text"`
+	Runs          []SuggestionRun `json:"runs,omitempty"`
+	FromHistory   bool            `json:"fromHistory,omitempty"`
+	FeedbackToken string          `json:"feedbackToken,omitempty"`
 }
 
 type SuggestionRun struct {

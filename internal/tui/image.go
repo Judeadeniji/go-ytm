@@ -49,6 +49,9 @@ const (
 
 	thumbWidth  = 4
 	thumbHeight = 2
+
+	sugArtWidth  = 8
+	sugArtHeight = 3
 )
 
 func imageCacheKey(url string, width, height int) string {

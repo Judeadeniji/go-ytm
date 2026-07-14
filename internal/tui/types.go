@@ -35,7 +35,11 @@ type SearchSuggestion struct {
 	Runs        []ytmapi.SuggestionRun
 	FromHistory bool
 	Subtext     string
-	Image       string // pre-rendered ANSI image
+	ThumbURL    string
+	VideoID     string
+	BrowseID    string
+	PlaylistID  string
+	ResultType  string
 }
 
 type StreamURLMsg struct {

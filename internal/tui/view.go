@@ -74,66 +74,11 @@ func (m Model) View() string {
 
 	var mainContent string
 	if m.searchInput.Focused() {
-		// Render search suggestions modal
-		var sb strings.Builder
-		for i, s := range m.searchSuggestions {
-			var icon string
-			if s.FromHistory || s.Type == SuggestionHistory {
-				icon = "\ue292" // fa_history
-			} else {
-				icon = "\ue0e3" // fa_search
-			}
-			iconStyle := lipgloss.NewStyle().Foreground(colorSubtext).PaddingRight(2)
-			focused := m.listCursor == i
-			bg := colorSearchBg
-			if focused {
-				bg = colorFocusBg
-			}
-
-			if s.Type == SuggestionEntity {
-				// Rich entity row
-				img := lipgloss.NewStyle().Background(colorDivider).Foreground(colorText).Width(6).Height(3).Align(lipgloss.Center).Render("\nIMG")
-				title := lipgloss.NewStyle().Foreground(colorText).Background(bg).Render(s.Text)
-				sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s.Subtext)
-				info := lipgloss.JoinVertical(lipgloss.Left, title, sub)
-				row := lipgloss.JoinHorizontal(lipgloss.Top, img, "   ", info)
-				row = lipgloss.NewStyle().Background(bg).Render(row)
-				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
-				sb.WriteString(row)
-				sb.WriteString("\n\n")
-			} else {
-				// Text row with runs rendering
-				var textBuilder strings.Builder
-				if len(s.Runs) > 0 {
-					for _, run := range s.Runs {
-						if run.Bold {
-							textBuilder.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Background(bg).Render(run.Text))
-						} else {
-							textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(run.Text))
-						}
-					}
-				} else {
-					textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s.Text))
-				}
-
-				prefix := "  "
-				if focused {
-					prefix = "› "
-				}
-				row := lipgloss.JoinHorizontal(lipgloss.Top, iconStyle.Render(prefix+icon), textBuilder.String())
-				row = lipgloss.NewStyle().Background(bg).Render(row)
-				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
-				sb.WriteString(row)
-				sb.WriteString("\n\n")
-			}
+		searchModalWidth := searchWidth + 4
+		if searchModalWidth > mainWidth-2 {
+			searchModalWidth = max(24, mainWidth-2)
 		}
-
-		modal := lipgloss.NewStyle().
-			Background(colorSearchBg).
-			Width(searchWidth+4). // Match search box width + padding
-			Padding(1, 2).
-			Render(strings.TrimSuffix(sb.String(), "\n\n"))
-
+		modal := m.renderSuggestionsModal(searchModalWidth)
 		mainContent = lipgloss.NewStyle().
 			Background(colorBg).Foreground(colorText).
 			Width(mainWidth).Height(mainHeight).

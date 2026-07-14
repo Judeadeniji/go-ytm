@@ -342,22 +342,6 @@ func (m Model) moveSuggestionFocus(delta int) Model {
 	return m
 }
 
-func (m Model) activateSuggestion() (Model, tea.Cmd) {
-	if m.listCursor < 0 || m.listCursor >= len(m.searchSuggestions) {
-		query := m.searchInput.Value()
-		m.lastSearchQuery = query
-		m.statusMsg = "Searching for: " + query
-		m.searchInput.Blur()
-		return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter)
-	}
-	s := m.searchSuggestions[m.listCursor]
-	m.searchInput.SetValue(s.Text)
-	m.lastSearchQuery = s.Text
-	m.statusMsg = "Searching for: " + s.Text
-	m.searchInput.Blur()
-	return m, doSearchFiltered(m.ytmapiClient, s.Text, m.searchFilter)
-}
-
 // focusedSearchResult reports whether search result i (display order) has keyboard focus.
 func (m Model) focusedSearchResult(i int) bool {
 	return m.activePane == PaneMain && m.currentScreen() == screenSearch && m.listCursor == i
