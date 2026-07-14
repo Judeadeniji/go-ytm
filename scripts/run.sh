@@ -97,6 +97,14 @@ echo "==> Checking dependencies..."
 require_cmd curl
 require_cmd mpv
 
+# Ensure user-local and project binaries are visible (yt-dlp lives here often).
+export PATH="${HOME}/.local/bin:${ROOT}/bin:${PATH}"
+
+if ! command -v yt-dlp >/dev/null 2>&1; then
+	echo "warning: yt-dlp not found — needed when YouTube extraction falls back (age-gated tracks, etc.)" >&2
+	echo "         install with: pacman -S yt-dlp   # or: curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp && chmod +x ~/.local/bin/yt-dlp" >&2
+fi
+
 if [[ ! -x "$SYSTEM_PYTHON" ]]; then
 	echo "error: python3 not found (looked for /usr/bin/python3*)" >&2
 	exit 1

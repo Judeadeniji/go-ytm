@@ -543,9 +543,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.carouselOffsets[title] > 0 {
 						m.carouselOffsets[title]--
 					}
-					oldOffset := m.mainViewport.YOffset
 					m.setMainContent()
-					m.mainViewport.YOffset = oldOffset
 					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 
@@ -556,9 +554,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.carouselOffsets[title] < maxLen-1 {
 						m.carouselOffsets[title]++
 					}
-					oldOffset := m.mainViewport.YOffset
 					m.setMainContent()
-					m.mainViewport.YOffset = oldOffset
 					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 			}

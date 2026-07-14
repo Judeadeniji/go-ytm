@@ -25,7 +25,7 @@ func (m Model) View() string {
 	leftSidebar := lipgloss.NewStyle().
 		Background(colorBg).Foreground(colorText).
 		Width(left).Height(contentHeight).MaxHeight(contentHeight).
-		Render(m.leftViewport.View())
+		Render(safeViewportView(&m.leftViewport))
 
 	// ========================
 	// 2. HEADER (Search Bar)
@@ -144,7 +144,7 @@ func (m Model) View() string {
 			Background(colorBg).Foreground(colorText).
 			Width(mainWidth).Height(mainHeight).
 			Padding(0, 1).
-			Render(m.mainViewport.View())
+			Render(safeViewportView(&m.mainViewport))
 	}
 
 	center := lipgloss.JoinVertical(lipgloss.Left, header, mainContent)
@@ -163,7 +163,7 @@ func (m Model) View() string {
 		queuePane := lipgloss.NewStyle().
 			Background(colorBg).Foreground(colorText).
 			Width(innerW).Height(contentHeight).MaxHeight(contentHeight).
-			Render(m.rightViewport.View())
+			Render(safeViewportView(&m.rightViewport))
 		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, border, queuePane))
 	}
 
