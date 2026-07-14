@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/kkdai/youtube/v2"
+	youtube "github.com/kkdai/youtube/v2"
 )
 
 // Extractor manages extraction of stream URLs using kkdai/youtube and yt-dlp fallback
