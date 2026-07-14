@@ -6,6 +6,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -14,60 +15,124 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// renderWithTermimg tries to render via go-termimg (auto-detects Kitty/Sixel/iTerm2/Halfblocks).
-// Falls back to our own ANSI half-block renderer if termimg fails.
+// KittyImage holds terminal image data. Spacer is embedded in the Bubble Tea
+// layout; UploadSeq is written directly to /dev/tty when using Kitty Graphics
+// (Bubble Tea strips APC escape sequences from View output).
+type KittyImage struct {
+	UploadSeq string
+	PlaceSeq  string
+	Spacer    string
+}
+
+// WriteToTTY writes the Kitty Graphics upload payload directly to /dev/tty.
+// It is a no-op when UploadSeq is empty (e.g. ANSI half-block fallback).
+func (k *KittyImage) WriteToTTY() error {
+	if k == nil || k.UploadSeq == "" {
+		return nil
+	}
+	f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.WriteString(f, k.UploadSeq)
+	return err
+}
+
+// Art cell size used everywhere (cards, placeholders, cache). Keep these
+// fixed — variable image cell sizes cause the whole grid to jump.
+const (
+	artWidth  = 24
+	artHeight = 10
+)
+
+// artPlaceholder returns a fixed-size grey box used while thumbs load / on error.
+func artPlaceholder() string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("#333333")).
+		Width(artWidth).
+		Height(artHeight).
+		Render("")
+}
+
+// fitArt forces art into a fixed Width×Height cell so layout never shifts
+// when a real image replaces a placeholder.
+func fitArt(s string) string {
+	if s == "" {
+		return artPlaceholder()
+	}
+	// Mosaic often leaves a trailing newline which would otherwise add a blank row.
+	s = strings.TrimRight(s, "\n")
+	return lipgloss.NewStyle().
+		Width(artWidth).
+		Height(artHeight).
+		MaxWidth(artWidth).
+		MaxHeight(artHeight).
+		Render(s)
+}
+
+// renderWithTermimg uses go-termimg (Halfblocks) as the primary renderer.
+// mosaic treats Width/Height as pixel samples stepped 2×2 per cell, so we
+// request 2× the desired character-cell size. ANSI halfblocks is fallback only.
 func renderWithTermimg(img image.Image, width, height int) string {
-	rendered, err := termimg.New(img).Width(width).Height(height).Scale(termimg.ScaleFit).Render()
+	rendered, err := termimg.New(img).
+		Width(width * 2).
+		Height(height * 2).
+		Scale(termimg.ScaleStretch).
+		Protocol(termimg.Halfblocks).
+		Render()
 	if err == nil && rendered != "" {
 		return rendered
 	}
-	// Fallback: own ANSI half-block renderer
 	return ansiHalfblocks(img, width, height)
 }
 
+func wrapRendered(rendered string) KittyImage {
+	return KittyImage{Spacer: fitArt(rendered)}
+}
+
 // RenderLocalImage loads a local file and renders it as a terminal image.
-func RenderLocalImage(filepath string, width, height, _ int) string {
+func RenderLocalImage(filepath string, width, height, _ int) KittyImage {
 	f, err := os.Open(filepath)
 	if err != nil {
-		return fallbackBlock(width, height)
+		return fallbackKitty(width, height)
 	}
 	defer f.Close()
 
 	img, _, err := image.Decode(f)
 	if err != nil {
-		return fallbackBlock(width, height)
+		return fallbackKitty(width, height)
 	}
-	return renderWithTermimg(img, width, height)
+	return wrapRendered(renderWithTermimg(img, width, height))
 }
 
 // RenderRemoteImage downloads a URL and renders it as a terminal image.
-func RenderRemoteImage(url string, width, height, _ int) string {
+func RenderRemoteImage(url string, width, height, _ int) KittyImage {
 	resp, err := http.Get(url)
 	if err != nil {
-		return fallbackBlock(width, height)
+		return fallbackKitty(width, height)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fallbackBlock(width, height)
+		return fallbackKitty(width, height)
 	}
 
 	buf := new(bytes.Buffer)
 	if _, err = buf.ReadFrom(resp.Body); err != nil {
-		return fallbackBlock(width, height)
+		return fallbackKitty(width, height)
 	}
 
 	img, _, err := image.Decode(buf)
 	if err != nil {
-		return fallbackBlock(width, height)
+		return fallbackKitty(width, height)
 	}
-	return renderWithTermimg(img, width, height)
+	return wrapRendered(renderWithTermimg(img, width, height))
 }
 
 // ansiHalfblocks renders an image.Image using Unicode ▀ half-block characters
 // with ANSI true-color escape codes. This is the universal ANSI fallback.
 func ansiHalfblocks(img image.Image, width, height int) string {
-	// Scale to width×(height*2) so each pair of pixel rows maps to one terminal row.
 	scaled := resizeNearest(img, width, height*2)
 
 	var sb strings.Builder
@@ -102,7 +167,8 @@ func resizeNearest(src image.Image, w, h int) image.Image {
 	return dst
 }
 
-// fallbackBlock returns a plain colored block when image loading fails.
-func fallbackBlock(width, height int) string {
-	return lipgloss.NewStyle().Background(lipgloss.Color("#333333")).Width(width).Height(height).Render("")
+func fallbackKitty(width, height int) KittyImage {
+	_ = width
+	_ = height
+	return KittyImage{Spacer: artPlaceholder()}
 }

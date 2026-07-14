@@ -36,8 +36,14 @@ func NewPlayer() (*Player, error) {
 	// Ensure any old socket is removed
 	os.Remove(socketPath)
 
-	// Start mpv
-	cmd := execCommand("mpv", "--idle", "--input-ipc-server="+socketPath)
+	// Start mpv headless: audio only, never open a video/OSC window.
+	cmd := execCommand("mpv",
+		"--idle",
+		"--no-video",
+		"--force-window=no",
+		"--audio-display=no",
+		"--input-ipc-server="+socketPath,
+	)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start mpv: %w", err)
 	}
@@ -167,4 +173,15 @@ func (p *Player) Play() error {
 // Stop stops current playback
 func (p *Player) Stop() error {
 	return p.sendCommand("stop")
+}
+
+// TogglePause cycles the pause state of mpv.
+func (p *Player) TogglePause() error {
+	return p.sendCommand("cycle", "pause")
+}
+
+// SeekRelative seeks relative to the current position by the given number of seconds.
+// Negative values seek backward; positive values seek forward.
+func (p *Player) SeekRelative(seconds float64) error {
+	return p.sendCommand("seek", seconds, "relative")
 }

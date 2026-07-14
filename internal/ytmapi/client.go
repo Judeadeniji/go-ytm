@@ -44,12 +44,8 @@ type SearchResult struct {
 		Name string `json:"name"`
 		ID   string `json:"id"`
 	} `json:"album,omitempty"`
-	VideoType  string `json:"videoType,omitempty"`
-	Thumbnails []struct {
-		URL    string `json:"url"`
-		Width  int    `json:"width"`
-		Height int    `json:"height"`
-	} `json:"thumbnails,omitempty"`
+	VideoType  string      `json:"videoType,omitempty"`
+	Thumbnails []Thumbnail `json:"thumbnails,omitempty"`
 }
 
 type searchResponse struct {

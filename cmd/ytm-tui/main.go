@@ -5,11 +5,22 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	runewidth "github.com/mattn/go-runewidth"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
 	"github.com/judeadeniji/go-ytm/internal/tui"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 )
+
+func init() {
+	// U+10EEEE (Kitty Graphics Protocol Unicode placeholder) sits above U+20000
+	// which go-runewidth classifies as East Asian wide (width=2). This breaks
+	// lipgloss layout: it thinks 24 placeholder chars = 48 cols and truncates them,
+	// so Kitty only receives 12 chars and renders a broken/black image.
+	// Setting EastAsianWidth=false makes U+10EEEE return width=1, matching
+	// Kitty's own treatment of the character.
+	runewidth.DefaultCondition.EastAsianWidth = false
+}
 
 func main() {
 	p, err := player.NewPlayer()

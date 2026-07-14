@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/judeadeniji/go-ytm/internal/player"
@@ -122,9 +123,19 @@ func hashString(s string) int {
 func fetchImage(url string) tea.Cmd {
 	return func() tea.Msg {
 		id := hashString(url)
-		kitty := RenderRemoteImage(url, 24, 10, id)
+		kitty := RenderRemoteImage(url, artWidth, artHeight, id)
 		return ImageLoadedMsg{URL: url, Kitty: &kitty}
 	}
+}
+
+// imagesRedrawMsg is fired after a short debounce when thumbs finish loading,
+// so we rebuild the grid once instead of once-per-image.
+type imagesRedrawMsg struct{}
+
+func debounceImagesRedraw() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return imagesRedrawMsg{}
+	})
 }
 
 // writeTTY writes a Kitty Graphics payload directly to /dev/tty,

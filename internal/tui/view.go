@@ -22,12 +22,17 @@ func (m Model) View() string {
 		mainWidth = 0
 	}
 
+	contentHeight := m.height - playerBarHeight
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
 	// ========================
 	// 1. LEFT SIDEBAR
 	// ========================
 	leftSidebar := lipgloss.NewStyle().
 		Background(colorBg).Foreground(colorText).
-		Width(leftWidth).Height(m.height).MaxHeight(m.height).
+		Width(leftWidth).Height(contentHeight).MaxHeight(contentHeight).
 		Render(m.leftViewport.View())
 
 	// ========================
@@ -70,6 +75,11 @@ func (m Model) View() string {
 	// ========================
 	// 3. MAIN CONTENT (Grids or Search Modal)
 	// ========================
+	mainHeight := contentHeight - 4 // minus header
+	if mainHeight < 1 {
+		mainHeight = 1
+	}
+
 	var mainContent string
 	if m.searchInput.Focused() {
 		// Render search suggestions modal
@@ -107,7 +117,7 @@ func (m Model) View() string {
 				} else {
 					textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(s.Text))
 				}
-				
+
 				row := lipgloss.JoinHorizontal(lipgloss.Top, iconStyle.Render(icon), textBuilder.String())
 				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
 				sb.WriteString(row)
@@ -123,20 +133,20 @@ func (m Model) View() string {
 
 		mainContent = lipgloss.NewStyle().
 			Background(colorBg).Foreground(colorText).
-			Width(mainWidth).Height(m.height - 4).
+			Width(mainWidth).Height(mainHeight).
 			PaddingLeft(searchPadding).
 			Render(modal)
 	} else {
 		mainContent = lipgloss.NewStyle().
 			Background(colorBg).Foreground(colorText).
-			Width(mainWidth).Height(m.height-4). // minus header
+			Width(mainWidth).Height(mainHeight).
 			Padding(0, 1).
 			Render(m.mainViewport.View())
 	}
 
-	// Assemble Header and Main Content
 	rightPane := lipgloss.JoinVertical(lipgloss.Left, header, mainContent)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftSidebar, rightPane)
+	playerBar := m.generatePlayerBar(m.width)
 
-	// Assemble All
-	return m.zone.Scan(lipgloss.JoinHorizontal(lipgloss.Top, leftSidebar, rightPane))
+	return m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))
 }

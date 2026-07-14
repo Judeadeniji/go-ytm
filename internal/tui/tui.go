@@ -20,18 +20,18 @@ type Model struct {
 	activePane     Pane
 	activeCarousel int
 
-	menuItems []string
+	menuItems  []string
 	activeMenu string
-	playlists [][2]string
+	playlists  [][2]string
 
 	filters []string
 
-	homeCarousels []ytmapi.HomeCarousel
-
-	cachedArt         string
+	homeCarousels     []ytmapi.HomeCarousel
+	carouselOffsets   map[string]int
+	cachedArt         *KittyImage
+	imageCache        map[string]*KittyImage
 	mainViewport      viewport.Model
 	leftViewport      viewport.Model
-	carouselOffsets   map[string]int
 	searchInput       textinput.Model
 	searchSuggestions []SearchSuggestion
 	zone              *zone.Manager
@@ -42,11 +42,19 @@ type Model struct {
 	player    *player.Player
 	extractor *search.Extractor
 	statusMsg string
+
+	// Playback state
+	queue        Queue
+	currentTrack *Track
+	isPlaying    bool
+
+	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
+	imageDirty bool
 }
 
 func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client) Model {
 	// Pre-render the image once at startup!
-	artStr := RenderLocalImage(".build_assets/2026-07-14_05-43.png", 24, 10)
+	artStr := RenderLocalImage(".build_assets/2026-07-14_05-43.png", artWidth, artHeight, hashString(".build_assets/2026-07-14_05-43.png"))
 
 	// Initialize interactive search input
 	ti := textinput.New()
@@ -71,20 +79,14 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 			{"This ain't Odumodu Blvck", "Oluwaferanmi A.J"},
 			{"Violin Classics", "Oluwaferanmi A.J"},
 		},
-		filters: []string{"Podcasts", "Energize", "Workout", "Relax", "Commute", "Feel good", "Sad", "Romance", "Party", "Sleep", "Focus"},
-		homeCarousels: nil,
-		searchSuggestions: []SearchSuggestion{
-			{Type: SuggestionHistory, Text: "gnx"},
-			{Type: SuggestionQuery, Text: "gnx kendrick lamar"},
-			{Type: SuggestionQuery, Text: "gnx kendrick lamar full album"},
-			{Type: SuggestionQuery, Text: "gnx album"},
-			{Type: SuggestionEntity, Text: "GNX", Subtext: "🅴 Album • Kendrick Lamar • 2024", Image: artStr},
-			{Type: SuggestionEntity, Text: "gnx (feat. Hitta J3, YoungThreat & Peysoh)", Subtext: "🅴 Song • Kendrick Lamar • 19M plays • GNX", Image: artStr},
-		},
-		cachedArt:         artStr,
+		filters:           []string{"All", "Music", "Podcasts"},
+		homeCarousels:     nil,
+		searchSuggestions: []SearchSuggestion{},
+		carouselOffsets:   make(map[string]int),
+		cachedArt:         &artStr,
+		imageCache:        make(map[string]*KittyImage),
 		mainViewport:      viewport.New(0, 0),
 		leftViewport:      viewport.New(0, 0),
-		carouselOffsets:   make(map[string]int),
 		searchInput:       ti,
 		zone:              zone.New(),
 		searchResults:     nil,
@@ -92,6 +94,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 		player:            p,
 		extractor:         ext,
 		statusMsg:         "Ready",
+		queue:             Queue{current: -1},
 	}
 }
 
@@ -113,11 +116,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.leftViewport.Width = leftWidth
-		m.leftViewport.Height = m.height
+		m.leftViewport.Height = m.height - playerBarHeight
 		m.leftViewport.SetContent(m.generateSidebarContent(leftWidth))
 
 		m.mainViewport.Width = mainWidth - 2 // Account for padding
-		m.mainViewport.Height = m.height - 4 // Account for header
+		m.mainViewport.Height = m.height - 4 - playerBarHeight // header (4) + bottom bar
 		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 
 	case tea.KeyMsg:
@@ -168,14 +171,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.searchInput.Focus()
 			return m, textinput.Blink
-		case "p":
-			m.statusMsg = "Loading audio..."
-			// Proof of concept: Fetch "Not Like Us" by Kendrick Lamar
-			return m, fetchStreamURL(m.extractor, "T6eK-2OQtew")
+		case "p", " ":
+			if m.currentTrack != nil {
+				m.isPlaying = !m.isPlaying
+				return m, togglePause(m.player)
+			}
 		case "s":
 			m.statusMsg = "Stopped playback"
+			m.isPlaying = false
 			return m, stopPlayback(m.player)
+		case "n":
+			return m.playNext()
+		case "b":
+			return m.playPrev()
 		case "right":
+			if m.currentTrack != nil {
+				return m, seekCmd(m.player, 5)
+			}
 			// Scroll only the active carousel right
 			if m.activeCarousel >= 0 && m.activeCarousel < len(m.homeCarousels) {
 				activeTitle := m.homeCarousels[m.activeCarousel].Title
@@ -192,10 +204,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				oldOffset := m.mainViewport.YOffset
 				m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 				m.mainViewport.YOffset = oldOffset
+				return m, m.enqueueVisibleImages(mainWidth)
 			}
 			return m, nil
 
 		case "left":
+			if m.currentTrack != nil {
+				return m, seekCmd(m.player, -5)
+			}
 			// Scroll only the active carousel left
 			if m.activeCarousel >= 0 && m.activeCarousel < len(m.homeCarousels) {
 				activeTitle := m.homeCarousels[m.activeCarousel].Title
@@ -211,6 +227,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				oldOffset := m.mainViewport.YOffset
 				m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 				m.mainViewport.YOffset = oldOffset
+				return m, m.enqueueVisibleImages(mainWidth)
 			}
 			return m, nil
 
@@ -254,6 +271,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.mainViewport, cmd = m.mainViewport.Update(msg)
 		}
+	case TrackStartedMsg:
+		m.currentTrack = &msg.Track
+		m.isPlaying = true
+		m.statusMsg = "Playing: " + msg.Track.Title
+		return m, nil
 	case StreamURLMsg:
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Error: %v", msg.Err)
@@ -269,7 +291,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.searchResults = msg.Results
 		m.statusMsg = fmt.Sprintf("Found %d results", len(msg.Results))
-		
+
 		leftWidth := 24
 		mainWidth := m.width - leftWidth
 		if mainWidth < 0 {
@@ -277,21 +299,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 		m.mainViewport.YOffset = 0 // reset scroll
-		return m, nil
+
+		return m, m.enqueueVisibleImages(mainWidth)
 	case HomeMsg:
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Home error: %v", msg.Err)
 			return m, nil
 		}
 		m.homeCarousels = msg.Carousels
-		
+
 		leftWidth := 24
 		mainWidth := m.width - leftWidth
 		if mainWidth < 0 {
 			mainWidth = 0
 		}
 		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+
+		return m, m.enqueueVisibleImages(mainWidth)
+	case ImageLoadedMsg:
+		if msg.Kitty == nil {
+			msg.Kitty = &KittyImage{Spacer: artPlaceholder()}
+		}
+		m.imageCache[msg.URL] = msg.Kitty
+		// Debounce grid rebuild so a burst of finishes doesn't reshape N times.
+		if !m.imageDirty {
+			m.imageDirty = true
+			return m, debounceImagesRedraw()
+		}
 		return m, nil
+	case imagesRedrawMsg:
+		m.imageDirty = false
+		leftWidth := 24
+		mainWidth := m.width - leftWidth
+		if mainWidth < 0 {
+			mainWidth = 0
+		}
+		oldOffset := m.mainViewport.YOffset
+		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+		m.mainViewport.YOffset = oldOffset
+		// Kick off any newly-visible thumbs after layout settled.
+		return m, m.enqueueVisibleImages(mainWidth)
 	case SearchSuggestionsMsg:
 		if msg.Err == nil {
 			var sugs []SearchSuggestion
@@ -322,12 +369,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if mouseMsg.Type == tea.MouseLeft {
+			if m.zone.Get("player_play").InBounds(mouseMsg) {
+				if m.currentTrack != nil {
+					m.isPlaying = !m.isPlaying
+					return m, togglePause(m.player)
+				}
+				return m, nil
+			}
+			if m.zone.Get("player_next").InBounds(mouseMsg) {
+				return m.playNext()
+			}
+			if m.zone.Get("player_prev").InBounds(mouseMsg) {
+				return m.playPrev()
+			}
+
 			if !m.searchInput.Focused() && len(m.searchResults) > 0 {
 				for _, res := range m.searchResults {
 					if res.VideoID != "" {
 						if m.zone.Get("search_result_video_"+res.VideoID).InBounds(mouseMsg) {
-							m.statusMsg = "Fetching audio for: " + res.Title
-							return m, fetchStreamURL(m.extractor, res.VideoID)
+							m.statusMsg = "Loading: " + res.Title
+							artist := res.Artist
+							if artist == "" && len(res.Artists) > 0 {
+								artist = res.Artists[0].Name
+							}
+							thumbnailURL := ""
+							if len(res.Thumbnails) > 0 {
+								thumbnailURL = res.Thumbnails[0].URL
+							}
+							t := Track{
+								VideoID:      res.VideoID,
+								Title:        res.Title,
+								Artist:       artist,
+								ThumbnailURL: thumbnailURL,
+							}
+							m.queue.AppendAndSelect(t)
+							m.currentTrack = &t
+							m.isPlaying = true
+							return m, playTrack(m.player, m.extractor, t)
 						}
 					}
 				}
@@ -359,7 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.carouselOffsets[title] > 0 {
 						m.carouselOffsets[title]--
 					}
-					
+
 					leftWidth := 24
 					mainWidth := m.width - leftWidth
 					if mainWidth < 0 {
@@ -368,9 +446,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					oldOffset := m.mainViewport.YOffset
 					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 					m.mainViewport.YOffset = oldOffset
-					return m, nil
+					return m, m.enqueueVisibleImages(mainWidth)
 				}
-				
+
 				if m.zone.Get(title+"_right").InBounds(mouseMsg) {
 					m.activeCarousel = i
 					m.activePane = PaneMain
@@ -379,7 +457,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.carouselOffsets[title] < maxLen-1 {
 						m.carouselOffsets[title]++
 					}
-					
+
 					leftWidth := 24
 					mainWidth := m.width - leftWidth
 					if mainWidth < 0 {
@@ -388,7 +466,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					oldOffset := m.mainViewport.YOffset
 					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
 					m.mainViewport.YOffset = oldOffset
-					return m, nil
+					return m, m.enqueueVisibleImages(mainWidth)
+				}
+
+				// Carousel card click-to-play
+				for _, card := range carousel.Contents {
+					if card.VideoID != "" {
+						if m.zone.Get("search_result_video_"+card.VideoID).InBounds(mouseMsg) {
+							m.statusMsg = "Loading: " + card.Title
+							thumbnailURL := ""
+							if len(card.Thumbnails) > 0 {
+								thumbnailURL = card.Thumbnails[0].URL
+							}
+							t := Track{
+								VideoID:      card.VideoID,
+								Title:        card.Title,
+								Artist:       card.Description,
+								ThumbnailURL: thumbnailURL,
+							}
+							m.queue.AppendAndSelect(t)
+							m.currentTrack = &t
+							m.isPlaying = true
+							return m, playTrack(m.player, m.extractor, t)
+						}
+					}
 				}
 			}
 		}
@@ -401,4 +502,104 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+// playNext advances the queue and starts the next track.
+func (m Model) playNext() (Model, tea.Cmd) {
+	t, ok := m.queue.Next()
+	if !ok {
+		m.statusMsg = "End of queue"
+		return m, nil
+	}
+	m.currentTrack = &t
+	m.isPlaying = true
+	m.statusMsg = "Loading: " + t.Title
+	return m, playTrack(m.player, m.extractor, t)
+}
+
+// playPrev moves back in the queue and starts that track.
+func (m Model) playPrev() (Model, tea.Cmd) {
+	t, ok := m.queue.Prev()
+	if !ok {
+		m.statusMsg = "Start of queue"
+		return m, nil
+	}
+	m.currentTrack = &t
+	m.isPlaying = true
+	m.statusMsg = "Loading: " + t.Title
+	return m, playTrack(m.player, m.extractor, t)
+}
+
+// enqueueVisibleImages fetches thumbs only for currently visible cards / top
+// search results, using a fixed-size placeholder so layout stays stable.
+func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
+	const maxSearchThumbs = 8
+
+	var cmds []tea.Cmd
+	seen := make(map[string]struct{})
+
+	queue := func(url string) {
+		if url == "" {
+			return
+		}
+		if _, dup := seen[url]; dup {
+			return
+		}
+		seen[url] = struct{}{}
+		if _, ok := m.imageCache[url]; ok {
+			return
+		}
+		ph := KittyImage{Spacer: artPlaceholder()}
+		m.imageCache[url] = &ph
+		cmds = append(cmds, fetchImage(url))
+	}
+
+	if len(m.searchResults) > 0 {
+		n := 0
+		for _, res := range m.searchResults {
+			if n >= maxSearchThumbs {
+				break
+			}
+			if len(res.Thumbnails) == 0 {
+				continue
+			}
+			// Prefer top-result art; other rows don't show thumbs today.
+			if res.Category == "Top result" || n == 0 {
+				queue(res.Thumbnails[0].URL)
+				n++
+			}
+		}
+	} else {
+		contentWidth := mainWidth - 2
+		cardWidth := 28
+		maxVisible := contentWidth / cardWidth
+		if maxVisible < 1 {
+			maxVisible = 1
+		}
+		maxVisible++ // match generateGridContent overflow allowance
+
+		for _, carousel := range m.homeCarousels {
+			offset := m.carouselOffsets[carousel.Title]
+			if offset < 0 {
+				offset = 0
+			}
+			end := offset + maxVisible
+			if end > len(carousel.Contents) {
+				end = len(carousel.Contents)
+			}
+			if offset > end {
+				continue
+			}
+			for _, card := range carousel.Contents[offset:end] {
+				if len(card.Thumbnails) > 0 {
+					queue(card.Thumbnails[0].URL)
+				}
+			}
+		}
+	}
+
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
