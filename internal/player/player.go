@@ -19,24 +19,32 @@ type Player struct {
 	cmd        *exec.Cmd
 	conn       net.Conn
 	mu         sync.Mutex
+
+	pendingMu sync.Mutex
+	pending   map[int]chan ipcResponse
+	nextReqID int
 }
 
 // IPCCommand represents a JSON IPC command for mpv
 type IPCCommand struct {
-	Command []interface{} `json:"command"`
+	Command   []interface{} `json:"command"`
+	RequestID int           `json:"request_id,omitempty"`
+}
+
+type ipcResponse struct {
+	Error     string          `json:"error"`
+	Data      json.RawMessage `json:"data"`
+	RequestID int             `json:"request_id"`
+	Event     string          `json:"event"`
 }
 
 var execCommand = exec.Command
 
 // NewPlayer starts an mpv instance with an IPC server and connects to it.
 func NewPlayer() (*Player, error) {
-	// Create a temporary socket path
 	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("go-ytm-mpv-%d.sock", time.Now().UnixNano()))
-
-	// Ensure any old socket is removed
 	os.Remove(socketPath)
 
-	// Start mpv headless: audio only, never open a video/OSC window.
 	cmd := execCommand("mpv",
 		"--idle",
 		"--no-video",
@@ -51,22 +59,18 @@ func NewPlayer() (*Player, error) {
 	p := &Player{
 		socketPath: socketPath,
 		cmd:        cmd,
+		pending:    make(map[int]chan ipcResponse),
 	}
 
-	// Wait for the socket to be created and connect
-	err := p.connect(5 * time.Second)
-	if err != nil {
+	if err := p.connect(5 * time.Second); err != nil {
 		p.Close()
 		return nil, fmt.Errorf("failed to connect to mpv IPC: %w", err)
 	}
 
-	// Start reading events so the socket buffer doesn't fill up
 	p.startEventLoop()
-
 	return p, nil
 }
 
-// connect attempts to dial the Unix socket with a timeout
 func (p *Player) connect(timeout time.Duration) error {
 	start := time.Now()
 	for {
@@ -82,14 +86,32 @@ func (p *Player) connect(timeout time.Duration) error {
 	}
 }
 
-// startEventLoop reads from the connection to prevent buffer overflow.
-// In the future, this can be expanded to parse events and dispatch them.
 func (p *Player) startEventLoop() {
 	go func() {
 		scanner := bufio.NewScanner(p.conn)
+		// mpv responses can be large; bump token size.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			// discard event string for now
-			_ = scanner.Text()
+			line := scanner.Bytes()
+			var resp ipcResponse
+			if err := json.Unmarshal(line, &resp); err != nil {
+				continue
+			}
+			if resp.RequestID == 0 && resp.Event != "" {
+				continue // unsolicited event
+			}
+			p.pendingMu.Lock()
+			ch, ok := p.pending[resp.RequestID]
+			if ok {
+				delete(p.pending, resp.RequestID)
+			}
+			p.pendingMu.Unlock()
+			if ok {
+				select {
+				case ch <- resp:
+				default:
+				}
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			if !isClosedConnectionError(err) {
@@ -99,7 +121,6 @@ func (p *Player) startEventLoop() {
 	}()
 }
 
-// isClosedConnectionError checks if an error is due to the connection being closed
 func isClosedConnectionError(err error) bool {
 	if err == nil {
 		return false
@@ -113,16 +134,13 @@ func (p *Player) Close() error {
 	defer p.mu.Unlock()
 
 	if p.conn != nil {
-		// Try to politely ask mpv to quit
-		p.sendCommandUnlocked("quit")
+		_ = p.sendCommandUnlocked("quit")
 		p.conn.Close()
 	}
 
 	if p.cmd != nil && p.cmd.Process != nil {
-		// Wait briefly for graceful shutdown, then force kill
 		done := make(chan error, 1)
 		go func() { done <- p.cmd.Wait() }()
-
 		select {
 		case <-done:
 		case <-time.After(500 * time.Millisecond):
@@ -148,11 +166,90 @@ func (p *Player) sendCommandUnlocked(args ...interface{}) error {
 	return err
 }
 
-// sendCommand sends a JSON IPC command to mpv
 func (p *Player) sendCommand(args ...interface{}) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.sendCommandUnlocked(args...)
+}
+
+func (p *Player) nextRequestID() int {
+	p.pendingMu.Lock()
+	defer p.pendingMu.Unlock()
+	p.nextReqID++
+	if p.nextReqID == 0 {
+		p.nextReqID = 1
+	}
+	return p.nextReqID
+}
+
+// getProperty sends get_property and waits for the matching response.
+func (p *Player) getProperty(name string) (json.RawMessage, error) {
+	id := p.nextRequestID()
+	ch := make(chan ipcResponse, 1)
+
+	p.pendingMu.Lock()
+	p.pending[id] = ch
+	p.pendingMu.Unlock()
+
+	defer func() {
+		p.pendingMu.Lock()
+		delete(p.pending, id)
+		p.pendingMu.Unlock()
+	}()
+
+	p.mu.Lock()
+	if p.conn == nil {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("not connected to mpv")
+	}
+	cmd := IPCCommand{Command: []interface{}{"get_property", name}, RequestID: id}
+	b, err := json.Marshal(cmd)
+	if err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
+	b = append(b, '\n')
+	_, err = p.conn.Write(b)
+	p.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case resp := <-ch:
+		if resp.Error != "" && resp.Error != "success" {
+			return nil, fmt.Errorf("mpv: %s", resp.Error)
+		}
+		return resp.Data, nil
+	case <-time.After(2 * time.Second):
+		return nil, fmt.Errorf("mpv get_property %s timed out", name)
+	}
+}
+
+// PositionSeconds returns the current playback position in seconds.
+func (p *Player) PositionSeconds() (float64, error) {
+	data, err := p.getProperty("time-pos")
+	if err != nil {
+		return 0, err
+	}
+	var v float64
+	if err := json.Unmarshal(data, &v); err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+// DurationSeconds returns the current media duration in seconds.
+func (p *Player) DurationSeconds() (float64, error) {
+	data, err := p.getProperty("duration")
+	if err != nil {
+		return 0, err
+	}
+	var v float64
+	if err := json.Unmarshal(data, &v); err != nil {
+		return 0, err
+	}
+	return v, nil
 }
 
 // Load loads a URL or file path into mpv
@@ -181,7 +278,6 @@ func (p *Player) TogglePause() error {
 }
 
 // SeekRelative seeks relative to the current position by the given number of seconds.
-// Negative values seek backward; positive values seek forward.
 func (p *Player) SeekRelative(seconds float64) error {
 	return p.sendCommand("seek", seconds, "relative")
 }

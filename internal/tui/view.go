@@ -16,29 +16,24 @@ func (m Model) View() string {
 		return "Terminal too small"
 	}
 
-	leftWidth := 24
-	mainWidth := m.width - leftWidth
-	if mainWidth < 0 {
-		mainWidth = 0
-	}
-
-	contentHeight := m.height - playerBarHeight
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
+	left, mainWidth, right := m.layoutWidths()
+	contentHeight := m.contentHeight()
 
 	// ========================
 	// 1. LEFT SIDEBAR
 	// ========================
 	leftSidebar := lipgloss.NewStyle().
 		Background(colorBg).Foreground(colorText).
-		Width(leftWidth).Height(contentHeight).MaxHeight(contentHeight).
+		Width(left).Height(contentHeight).MaxHeight(contentHeight).
 		Render(m.leftViewport.View())
 
 	// ========================
 	// 2. HEADER (Search Bar)
 	// ========================
 	searchWidth := 60
+	if searchWidth > mainWidth-4 {
+		searchWidth = max(20, mainWidth-4)
+	}
 	searchPadding := (mainWidth - searchWidth) / 2
 	if searchPadding < 0 {
 		searchPadding = 0
@@ -58,7 +53,7 @@ func (m Model) View() string {
 		rightPadding = 0
 	}
 
-	statusStyle := lipgloss.NewStyle().Foreground(colorSubtext).Width(20).Align(lipgloss.Right)
+	statusStyle := lipgloss.NewStyle().Foreground(colorSubtext).Width(28).MaxWidth(28).Align(lipgloss.Right)
 
 	headerContent := fmt.Sprintf("%s%s%s%s   %s",
 		strings.Repeat(" ", searchPadding),
@@ -69,16 +64,13 @@ func (m Model) View() string {
 
 	header := lipgloss.NewStyle().
 		Background(colorBg).Foreground(colorText).
-		Width(mainWidth).Height(4).Padding(1, 0).
+		Width(mainWidth).Height(headerHeight).Padding(1, 0).
 		Render(headerContent)
 
 	// ========================
 	// 3. MAIN CONTENT (Grids or Search Modal)
 	// ========================
-	mainHeight := contentHeight - 4 // minus header
-	if mainHeight < 1 {
-		mainHeight = 1
-	}
+	mainHeight := m.mainPaneHeight()
 
 	var mainContent string
 	if m.searchInput.Focused() {
@@ -92,14 +84,20 @@ func (m Model) View() string {
 				icon = "\ue0e3" // fa_search
 			}
 			iconStyle := lipgloss.NewStyle().Foreground(colorSubtext).PaddingRight(2)
+			focused := m.listCursor == i
+			bg := colorSearchBg
+			if focused {
+				bg = colorFocusBg
+			}
 
 			if s.Type == SuggestionEntity {
 				// Rich entity row
 				img := lipgloss.NewStyle().Background(colorDivider).Foreground(colorText).Width(6).Height(3).Align(lipgloss.Center).Render("\nIMG")
-				title := lipgloss.NewStyle().Foreground(colorText).Render(s.Text)
-				sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(s.Subtext)
+				title := lipgloss.NewStyle().Foreground(colorText).Background(bg).Render(s.Text)
+				sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s.Subtext)
 				info := lipgloss.JoinVertical(lipgloss.Left, title, sub)
 				row := lipgloss.JoinHorizontal(lipgloss.Top, img, "   ", info)
+				row = lipgloss.NewStyle().Background(bg).Render(row)
 				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
 				sb.WriteString(row)
 				sb.WriteString("\n\n")
@@ -109,16 +107,21 @@ func (m Model) View() string {
 				if len(s.Runs) > 0 {
 					for _, run := range s.Runs {
 						if run.Bold {
-							textBuilder.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(run.Text))
+							textBuilder.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Background(bg).Render(run.Text))
 						} else {
-							textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(run.Text))
+							textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(run.Text))
 						}
 					}
 				} else {
-					textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(s.Text))
+					textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s.Text))
 				}
 
-				row := lipgloss.JoinHorizontal(lipgloss.Top, iconStyle.Render(icon), textBuilder.String())
+				prefix := "  "
+				if focused {
+					prefix = "› "
+				}
+				row := lipgloss.JoinHorizontal(lipgloss.Top, iconStyle.Render(prefix+icon), textBuilder.String())
+				row = lipgloss.NewStyle().Background(bg).Render(row)
 				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
 				sb.WriteString(row)
 				sb.WriteString("\n\n")
@@ -144,8 +147,27 @@ func (m Model) View() string {
 			Render(m.mainViewport.View())
 	}
 
-	rightPane := lipgloss.JoinVertical(lipgloss.Left, header, mainContent)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftSidebar, rightPane)
+	center := lipgloss.JoinVertical(lipgloss.Left, header, mainContent)
+	parts := []string{leftSidebar, center}
+
+	if right > 0 {
+		border := lipgloss.NewStyle().
+			Foreground(colorDivider).
+			Background(colorBg).
+			Height(contentHeight).
+			Render("│")
+		innerW := right - 1
+		if innerW < 1 {
+			innerW = 1
+		}
+		queuePane := lipgloss.NewStyle().
+			Background(colorBg).Foreground(colorText).
+			Width(innerW).Height(contentHeight).MaxHeight(contentHeight).
+			Render(m.rightViewport.View())
+		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, border, queuePane))
+	}
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	playerBar := m.generatePlayerBar(m.width)
 
 	return m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))

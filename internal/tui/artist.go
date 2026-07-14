@@ -80,12 +80,23 @@ func (m Model) generateArtistContent(mainWidth int) string {
 				}
 			}
 
-			line := lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Bold(true).Foreground(colorText).Width(mainWidth/2).Render(rowTitle),
-				lipgloss.NewStyle().Foreground(colorSubtext).Render(sub),
-			)
-
 			zoneID := artistItemZone(kind, item)
+			focused := m.focusedArtistZone(zoneID)
+			bg := colorBg
+			titleColor := colorText
+			prefix := "  "
+			if focused {
+				bg = colorFocusBg
+				titleColor = colorAccent
+				prefix = "› "
+			}
+
+			line := lipgloss.JoinHorizontal(lipgloss.Top,
+				lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(mainWidth/2).Render(prefix+rowTitle),
+				lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(sub),
+			)
+			line = lipgloss.NewStyle().Background(bg).Width(mainWidth - 4).Render(line)
+
 			if zoneID != "" {
 				line = m.zone.Mark(zoneID, line)
 			}

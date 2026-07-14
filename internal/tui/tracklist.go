@@ -160,12 +160,9 @@ func (m *Model) ensureTrackCursorInView(headerLines, rowHeight int) {
 	bottom := top + viewH - 1
 
 	if cursorLine < top {
-		m.mainViewport.YOffset = cursorLine
+		m.mainViewport.SetYOffset(cursorLine)
 	} else if cursorLine+rowHeight-1 > bottom {
-		m.mainViewport.YOffset = cursorLine + rowHeight - viewH
-		if m.mainViewport.YOffset < 0 {
-			m.mainViewport.YOffset = 0
-		}
+		m.mainViewport.SetYOffset(cursorLine + rowHeight - viewH)
 	}
 }
 

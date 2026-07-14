@@ -11,7 +11,7 @@ var (
 	colorSubtext  = lipgloss.Color("#AAAAAA")
 	colorRed      = lipgloss.Color("#FF0000")
 	colorDivider  = lipgloss.Color("#333333")
-	colorAccent   = lipgloss.Color("#1DB954") // playing / focus accent
+	colorAccent   = lipgloss.Color("#FF0000") // YouTube red — active / playing
 	colorFocusBg  = lipgloss.Color("#282828")
 	colorCardArt  = []lipgloss.Color{
 		lipgloss.Color("#3E2723"), lipgloss.Color("#1B5E20"), lipgloss.Color("#B71C1C"),

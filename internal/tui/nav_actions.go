@@ -9,18 +9,52 @@ import (
 )
 
 func (m Model) mainWidth() int {
-	w := m.width - 24
-	if w < 0 {
-		return 0
-	}
-	return w
+	_, main, _ := m.layoutWidths()
+	return main
 }
 
 func (m *Model) setMainContent() {
 	mw := m.mainWidth()
 	old := m.mainViewport.YOffset
 	m.mainViewport.SetContent(m.generateMainContent(mw))
-	m.mainViewport.YOffset = old
+	m.mainViewport.SetYOffset(old)
+}
+
+func (m *Model) setQueuePanelContent() {
+	if !m.showQueuePanel() {
+		return
+	}
+	_, _, right := m.layoutWidths()
+	inner := right - 1 // leave room for the left border glyph
+	if inner < 8 {
+		inner = right
+	}
+	old := m.rightViewport.YOffset
+	m.rightViewport.Width = inner
+	m.rightViewport.Height = m.contentHeight()
+	m.rightViewport.SetContent(m.generateQueuePanelContent(inner))
+	m.rightViewport.SetYOffset(old)
+}
+
+func (m *Model) applyLayout() {
+	left, main, right := m.layoutWidths()
+	ch := m.contentHeight()
+	mh := m.mainPaneHeight()
+
+	m.leftViewport.Width = left
+	m.leftViewport.Height = ch
+	m.leftViewport.SetContent(m.generateSidebarContent(left))
+
+	m.mainViewport.Width = main - 2
+	if m.mainViewport.Width < 0 {
+		m.mainViewport.Width = 0
+	}
+	m.mainViewport.Height = mh
+	m.setMainContent()
+
+	if right > 0 {
+		m.setQueuePanelContent()
+	}
 }
 
 func (m Model) beginOpen(status string) Model {
@@ -125,8 +159,10 @@ func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, w
 		m.ensureTrackCursorInView(10, 1)
 		m.setMainContent()
 	}
+	m.applyLayout()
+	m.setQueuePanelContent()
 
-	cmds := []tea.Cmd{playTrack(m.player, m.extractor, t)}
+	cmds := []tea.Cmd{playTrack(m.player, m.extractor, t), m.enqueueVisibleImages(m.mainWidth())}
 	if seedWatch {
 		cmds = append(cmds, fetchWatch(m.ytmapiClient, videoID, watchPlaylistID, false))
 	}

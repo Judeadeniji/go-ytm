@@ -15,7 +15,7 @@ func (m Model) generateSidebarContent(leftWidth int) string {
 	sb.WriteString("\n\n")
 
 	// Menu Items
-	for _, item := range m.menuItems {
+	for i, item := range m.menuItems {
 		icon := "\ue0f5" // fa_home
 		if item == "Explore" {
 			icon = "\ue20f" // fa_compass
@@ -27,13 +27,23 @@ func (m Model) generateSidebarContent(leftWidth int) string {
 			icon = "\ue229" // fa_youtube_play
 		}
 
-		if item == m.activeMenu {
+		focused := m.focusedMenuItem(i)
+		active := item == m.activeMenu
+
+		switch {
+		case focused:
+			line := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("› ") +
+				lipgloss.NewStyle().Foreground(colorText).Bold(true).Background(colorFocusBg).Render(icon+"  "+item)
+			line = m.zone.Mark("menu_"+item, line)
+			sb.WriteString(line)
+			sb.WriteString("\n\n")
+		case active:
 			line := lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render("┃ ") +
 				lipgloss.NewStyle().Foreground(colorText).Bold(true).Render(icon+"  "+item)
 			line = m.zone.Mark("menu_"+item, line)
 			sb.WriteString(line)
 			sb.WriteString("\n\n")
-		} else {
+		default:
 			line := lipgloss.NewStyle().Foreground(colorSubtext).Render("  " + icon + "  " + item)
 			line = m.zone.Mark("menu_"+item, line)
 			sb.WriteString(line)

@@ -11,6 +11,7 @@ const (
 	PaneSidebar Pane = iota
 	PaneSearch
 	PaneMain
+	PaneQueue
 )
 
 type AlbumCard struct {

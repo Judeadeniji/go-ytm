@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,6 +33,7 @@ type Model struct {
 	imageCache        map[string]*KittyImage
 	mainViewport      viewport.Model
 	leftViewport      viewport.Model
+	rightViewport     viewport.Model
 	searchInput       textinput.Model
 	searchSuggestions []SearchSuggestion
 	zone              *zone.Manager
@@ -46,9 +48,13 @@ type Model struct {
 	statusMsg string
 
 	// Playback state
-	queue        Queue
-	currentTrack *Track
-	isPlaying    bool
+	queue            Queue
+	currentTrack     *Track
+	isPlaying        bool
+	progress         progress.Model
+	playPos          float64
+	playDuration     float64
+	queuePanelHidden bool // user dismissed the right rail
 
 	// Navigation / detail pages
 	stack        ViewStack
@@ -57,7 +63,10 @@ type Model struct {
 	artistPage   *ytmapi.ArtistPage
 	albumPage    *ytmapi.AlbumPage
 	playlistPage *ytmapi.PlaylistPage
-	trackCursor  int // focus index within playlist/album tracklist
+	trackCursor   int // focus index within playlist/album tracklist
+	listCursor    int // search / artist / sidebar / suggestions
+	homeCardCursor int // card index within active home carousel
+	queueCursor   int // focus in queue panel (separate from playing index)
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
@@ -99,6 +108,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 		imageCache:        make(map[string]*KittyImage),
 		mainViewport:      viewport.New(0, 0),
 		leftViewport:      viewport.New(0, 0),
+		rightViewport:     viewport.New(0, 0),
 		searchInput:       ti,
 		zone:              zone.New(),
 		searchResults:     nil,
@@ -107,11 +117,12 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 		extractor:         ext,
 		statusMsg:         "Ready",
 		queue:             Queue{current: -1},
+		progress:          newProgressBar(40),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return fetchHome(m.ytmapiClient)
+	return tea.Batch(fetchHome(m.ytmapiClient), tickPlayProgress())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -120,33 +131,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		leftWidth := 24
-		mainWidth := m.width - leftWidth
-		if mainWidth < 0 {
-			mainWidth = 0
-		}
-
-		m.leftViewport.Width = leftWidth
-		m.leftViewport.Height = m.height - playerBarHeight
-		m.leftViewport.SetContent(m.generateSidebarContent(leftWidth))
-
-		m.mainViewport.Width = mainWidth - 2 // Account for padding
-		m.mainViewport.Height = m.height - 4 - playerBarHeight // header (4) + bottom bar
-		m.mainViewport.SetContent(m.generateMainContent(mainWidth))
+		m.applyLayout()
+		return m, m.enqueueVisibleImages(m.mainWidth())
 
 	case tea.KeyMsg:
 		// If the search bar is focused, hijack keyboard events
 		if m.searchInput.Focused() {
 			switch msg.String() {
 			case "enter":
-				query := m.searchInput.Value()
-				m.lastSearchQuery = query
-				m.statusMsg = "Searching for: " + query
-				m.searchInput.Blur()
-				return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter)
+				mm, cmd := m.activateSuggestion()
+				return mm, cmd
 			case "esc":
 				m.searchInput.Blur()
+				return m, nil
+			case "up", "k":
+				m = m.moveSuggestionFocus(-1)
+				return m, nil
+			case "down", "j":
+				m = m.moveSuggestionFocus(1)
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -155,6 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newVal := m.searchInput.Value()
 
 			if newVal != oldVal {
+				m.listCursor = 0
 				return m, tea.Batch(cmd, fetchSuggestions(m.ytmapiClient, newVal))
 			}
 			return m, cmd
@@ -167,16 +170,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.popNav()
 			return m, nil
 		case "tab":
+			m.activePane = m.nextPane()
 			if m.activePane == PaneSidebar {
-				m.activePane = PaneMain
-			} else {
-				m.activePane = PaneSidebar
+				m.listCursor = 0
+				for i, item := range m.menuItems {
+					if item == m.activeMenu {
+						m.listCursor = i
+						break
+					}
+				}
+				m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+			}
+			if m.activePane == PaneQueue {
+				m.queueCursor = m.queue.CurrentIndex()
+				if m.queueCursor < 0 {
+					m.queueCursor = 0
+				}
+				m.setQueuePanelContent()
 			}
 			return m, nil
+		case "\\":
+			m.queuePanelHidden = !m.queuePanelHidden
+			m.applyLayout()
+			return m, m.enqueueVisibleImages(m.mainWidth())
 		case "/":
+			m.listCursor = 0
 			m.searchInput.Focus()
 			return m, textinput.Blink
-		case "p", " ":
+		case "p":
 			if m.currentTrack != nil {
 				m.isPlaying = !m.isPlaying
 				if m.onTracklistScreen() {
@@ -184,124 +205,127 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, togglePause(m.player)
 			}
+			return m, nil
+		case " ":
+			if m.currentTrack != nil {
+				m.isPlaying = !m.isPlaying
+				if m.onTracklistScreen() {
+					m.setMainContent()
+				}
+				return m, togglePause(m.player)
+			}
+			// No track: treat space as activate when a list is focused.
+			return m.activateFocused()
 		case "s":
 			m.statusMsg = "Stopped playback"
 			m.isPlaying = false
+			m.playPos = 0
+			m.playDuration = 0
+			m.setQueuePanelContent()
 			return m, stopPlayback(m.player)
 		case "n":
 			return m.playNext()
 		case "b":
 			return m.playPrev()
 		case "enter":
-			if m.onTracklistScreen() {
-				return m.playFocusedTrack()
-			}
-		case "right":
+			return m.activateFocused()
+		case ",":
 			if m.currentTrack != nil {
-				return m, seekCmd(m.player, 5)
-			}
-			// Scroll only the active carousel right
-			if m.activeCarousel >= 0 && m.activeCarousel < len(m.homeCarousels) {
-				activeTitle := m.homeCarousels[m.activeCarousel].Title
-				maxLen := len(m.homeCarousels[m.activeCarousel].Contents)
-				if m.carouselOffsets[activeTitle] < maxLen-1 {
-					m.carouselOffsets[activeTitle]++
-				}
-
-				leftWidth := 24
-				mainWidth := m.width - leftWidth
-				if mainWidth < 0 {
-					mainWidth = 0
-				}
-				oldOffset := m.mainViewport.YOffset
-				m.mainViewport.SetContent(m.generateMainContent(mainWidth))
-				m.mainViewport.YOffset = oldOffset
-				return m, m.enqueueVisibleImages(mainWidth)
+				return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
 			}
 			return m, nil
-
-		case "left":
+		case ".":
 			if m.currentTrack != nil {
-				return m, seekCmd(m.player, -5)
-			}
-			// Scroll only the active carousel left
-			if m.activeCarousel >= 0 && m.activeCarousel < len(m.homeCarousels) {
-				activeTitle := m.homeCarousels[m.activeCarousel].Title
-				if m.carouselOffsets[activeTitle] > 0 {
-					m.carouselOffsets[activeTitle]--
-				}
-
-				leftWidth := 24
-				mainWidth := m.width - leftWidth
-				if mainWidth < 0 {
-					mainWidth = 0
-				}
-				oldOffset := m.mainViewport.YOffset
-				m.mainViewport.SetContent(m.generateMainContent(mainWidth))
-				m.mainViewport.YOffset = oldOffset
-				return m, m.enqueueVisibleImages(mainWidth)
+				return m, tea.Batch(seekCmd(m.player, 5), fetchPlayProgress(m.player))
 			}
 			return m, nil
-
+		case "right", "l":
+			if m.activePane == PaneMain && m.onHomeScreen() {
+				return m.moveHomeCard(1)
+			}
+			if m.currentTrack != nil {
+				return m, tea.Batch(seekCmd(m.player, 5), fetchPlayProgress(m.player))
+			}
+			return m, nil
+		case "left", "h":
+			if m.activePane == PaneMain && m.onHomeScreen() {
+				return m.moveHomeCard(-1)
+			}
+			if m.currentTrack != nil {
+				return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
+			}
+			return m, nil
 		case "up", "k":
-			if m.onTracklistScreen() {
-				m = m.moveTrackCursor(-1)
-				return m, nil
+			if mm, handled := m.moveListFocus(-1); handled {
+				return mm, nil
 			}
-			if m.activePane == PaneMain {
-				if m.activeCarousel > 0 {
-					m.activeCarousel--
-					leftWidth := 24
-					mainWidth := m.width - leftWidth
-					if mainWidth < 0 {
-						mainWidth = 0
-					}
-					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateMainContent(mainWidth))
-					m.mainViewport.YOffset = oldOffset
-				}
-			}
-			// Let it fall through to viewport for scrolling
+			return m, nil
 		case "down", "j":
-			if m.onTracklistScreen() {
-				m = m.moveTrackCursor(1)
-				return m, nil
+			if mm, handled := m.moveListFocus(1); handled {
+				return mm, nil
 			}
-			if m.activePane == PaneMain {
-				if m.activeCarousel < len(m.homeCarousels)-1 {
-					m.activeCarousel++
-					leftWidth := 24
-					mainWidth := m.width - leftWidth
-					if mainWidth < 0 {
-						mainWidth = 0
-					}
-					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateMainContent(mainWidth))
-					m.mainViewport.YOffset = oldOffset
-				}
+			return m, nil
+		case "pgup", "ctrl+u":
+			switch m.activePane {
+			case PaneSidebar:
+				m.leftViewport.ViewUp()
+			case PaneQueue:
+				m.rightViewport.ViewUp()
+			default:
+				m.mainViewport.ViewUp()
 			}
-			// Let it fall through to viewport for scrolling
+			return m, nil
+		case "pgdown", "ctrl+d":
+			switch m.activePane {
+			case PaneSidebar:
+				m.leftViewport.ViewDown()
+			case PaneQueue:
+				m.rightViewport.ViewDown()
+			default:
+				m.mainViewport.ViewDown()
+			}
+			return m, nil
 		}
-
-		// Pass key events to active viewport for scrolling
-		if m.activePane == PaneSidebar {
-			m.leftViewport, cmd = m.leftViewport.Update(msg)
-		} else {
-			m.mainViewport, cmd = m.mainViewport.Update(msg)
-		}
+		return m, nil
 	case TrackStartedMsg:
 		m.currentTrack = &msg.Track
 		m.isPlaying = true
+		m.playPos = 0
+		m.playDuration = 0
 		m.statusMsg = "Playing: " + msg.Track.Title
 		if m.onTracklistScreen() {
 			m = m.syncTrackCursorToPlaying()
 			m.ensureTrackCursorInView(10, 1)
 			m.setMainContent()
 		}
+		showing := m.showQueuePanel()
+		m.applyLayout()
+		if showing {
+			m.queueCursor = m.queue.CurrentIndex()
+			if m.queueCursor < 0 {
+				m.queueCursor = 0
+			}
+		}
+		m.setQueuePanelContent()
+		return m, tea.Batch(fetchPlayProgress(m.player), m.enqueueVisibleImages(m.mainWidth()))
+	case playProgressTickMsg:
+		if m.currentTrack == nil {
+			return m, tickPlayProgress()
+		}
+		return m, tea.Batch(fetchPlayProgress(m.player), tickPlayProgress())
+	case playProgressMsg:
+		if msg.Err == nil {
+			m.playPos = msg.Pos
+			if msg.Duration > 0 {
+				m.playDuration = msg.Duration
+			}
+			// Don't rebuild the queue rail every tick — that causes flicker.
+			// Bottom player bar reads playPos/Duration live from Model.
+		}
 		return m, nil
 	case StreamURLMsg:
 		if msg.Err != nil {
-			m.statusMsg = fmt.Sprintf("Error: %v", msg.Err)
+			m.statusMsg = shortStreamErr(msg.Err)
 			return m, nil
 		}
 
@@ -314,6 +338,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.searchResults = msg.Results
+		m.listCursor = 0
 		m.stack.Clear()
 		m.artistPage = nil
 		m.albumPage = nil
@@ -333,6 +358,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.artistPage = msg.Page
+		m.listCursor = 0
 		m.pageErr = ""
 		id := msg.RequestID
 		if id == "" {
@@ -391,22 +417,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.queue.Add(trackFromAPI(tr))
 		}
-		return m, nil
+		m.applyLayout()
+		m.setQueuePanelContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case HomeMsg:
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Home error: %v", msg.Err)
 			return m, nil
 		}
 		m.homeCarousels = msg.Carousels
-
-		leftWidth := 24
-		mainWidth := m.width - leftWidth
-		if mainWidth < 0 {
-			mainWidth = 0
-		}
-		m.mainViewport.SetContent(m.generateMainContent(mainWidth))
-
-		return m, m.enqueueVisibleImages(mainWidth)
+		m.setMainContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case ImageLoadedMsg:
 		if msg.Kitty == nil {
 			msg.Kitty = &KittyImage{Spacer: sizedPlaceholder(msg.Width, msg.Height)}
@@ -427,16 +448,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case imagesRedrawMsg:
 		m.imageDirty = false
-		leftWidth := 24
-		mainWidth := m.width - leftWidth
-		if mainWidth < 0 {
-			mainWidth = 0
-		}
-		oldOffset := m.mainViewport.YOffset
-		m.mainViewport.SetContent(m.generateMainContent(mainWidth))
-		m.mainViewport.YOffset = oldOffset
+		m.setMainContent()
+		m.setQueuePanelContent()
 		// Kick off any newly-visible thumbs after layout settled.
-		return m, m.enqueueVisibleImages(mainWidth)
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case SearchSuggestionsMsg:
 		if msg.Err == nil {
 			var sugs []SearchSuggestion
@@ -471,6 +486,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.zone.Get("player_play").InBounds(mouseMsg) {
 				if m.currentTrack != nil {
 					m.isPlaying = !m.isPlaying
+					m.setQueuePanelContent()
 					return m, togglePause(m.player)
 				}
 				return m, nil
@@ -482,12 +498,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.playPrev()
 			}
 
+			// Queue panel track jumps
+			if m.showQueuePanel() {
+				for i := 0; i < m.queue.Len(); i++ {
+					if m.zone.Get(fmt.Sprintf("queue_track_%d", i)).InBounds(mouseMsg) {
+						return m.playQueueIndex(i)
+					}
+				}
+			}
+
 			// Sidebar menu items
 			for _, item := range m.menuItems {
 				if m.zone.Get("menu_"+item).InBounds(mouseMsg) {
 					if item == "Home" {
 						m = m.goHome()
-						m.leftViewport.SetContent(m.generateSidebarContent(24))
+						m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 						return m, m.enqueueVisibleImages(m.mainWidth())
 					}
 					m.activeMenu = item
@@ -498,8 +523,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.playlistPage = nil
 					m.pageLoading = false
 					m.pageErr = ""
-					m.leftViewport.SetContent(m.generateSidebarContent(24))
-					m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+					m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+					m.setMainContent()
 					m.mainViewport.YOffset = 0
 					return m, nil
 				}
@@ -519,7 +544,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.carouselOffsets[title]--
 					}
 					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+					m.setMainContent()
 					m.mainViewport.YOffset = oldOffset
 					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
@@ -532,16 +557,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.carouselOffsets[title]++
 					}
 					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+					m.setMainContent()
 					m.mainViewport.YOffset = oldOffset
 					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 			}
 		}
 
-		if mouseMsg.X < 24 { // leftWidth
+		left, main, _ := m.layoutWidths()
+		switch {
+		case mouseMsg.X < left:
 			m.leftViewport, cmd = m.leftViewport.Update(msg)
-		} else {
+		case mouseMsg.X >= left+main && m.showQueuePanel():
+			m.activePane = PaneQueue
+			m.rightViewport, cmd = m.rightViewport.Update(msg)
+		default:
 			m.mainViewport, cmd = m.mainViewport.Update(msg)
 		}
 	}
@@ -556,15 +586,7 @@ func (m Model) playNext() (Model, tea.Cmd) {
 		m.statusMsg = "End of queue"
 		return m, nil
 	}
-	m.currentTrack = &t
-	m.isPlaying = true
-	m.statusMsg = "Loading: " + t.Title
-	if m.onTracklistScreen() {
-		m = m.syncTrackCursorToPlaying()
-		m.ensureTrackCursorInView(10, 1)
-		m.setMainContent()
-	}
-	return m, playTrack(m.player, m.extractor, t)
+	return m.startQueuedTrack(t)
 }
 
 // playPrev moves back in the queue and starts that track.
@@ -574,15 +596,52 @@ func (m Model) playPrev() (Model, tea.Cmd) {
 		m.statusMsg = "Start of queue"
 		return m, nil
 	}
+	return m.startQueuedTrack(t)
+}
+
+// playQueueIndex jumps to a queue slot and plays it.
+func (m Model) playQueueIndex(i int) (Model, tea.Cmd) {
+	if !m.queue.JumpTo(i) {
+		return m, nil
+	}
+	t, ok := m.queue.Current()
+	if !ok {
+		return m, nil
+	}
+	return m.startQueuedTrack(t)
+}
+
+func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.currentTrack = &t
 	m.isPlaying = true
+	m.playPos = 0
+	m.playDuration = 0
+	m.queueCursor = m.queue.CurrentIndex()
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
 		m.ensureTrackCursorInView(10, 1)
 		m.setMainContent()
 	}
-	return m, playTrack(m.player, m.extractor, t)
+	m.applyLayout()
+	m.setQueuePanelContent()
+	return m, tea.Batch(playTrack(m.player, m.extractor, t), m.enqueueVisibleImages(m.mainWidth()))
+}
+
+func (m Model) nextPane() Pane {
+	switch m.activePane {
+	case PaneSidebar:
+		return PaneMain
+	case PaneMain:
+		if m.showQueuePanel() {
+			return PaneQueue
+		}
+		return PaneSidebar
+	case PaneQueue:
+		return PaneSidebar
+	default:
+		return PaneMain
+	}
 }
 
 // enqueueVisibleImages fetches thumbs for the active view (home cards, search,
@@ -666,6 +725,10 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 				}
 			}
 		}
+	}
+
+	if m.showQueuePanel() && m.currentTrack != nil && m.currentTrack.ThumbnailURL != "" {
+		queue(m.currentTrack.ThumbnailURL, queueArtWidth, queueArtHeight)
 	}
 
 	if len(cmds) == 0 {

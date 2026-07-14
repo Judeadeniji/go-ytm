@@ -3,18 +3,69 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/progress"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/player"
 )
 
-const playerBarHeight = 3
+const playerBarHeight = 4
 
-// generatePlayerBar renders the 3-line now-playing bar at the bottom of the UI.
+type playProgressMsg struct {
+	Pos      float64
+	Duration float64
+	Err      error
+}
+
+type playProgressTickMsg time.Time
+
+func tickPlayProgress() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return playProgressTickMsg(t)
+	})
+}
+
+func fetchPlayProgress(p *player.Player) tea.Cmd {
+	return func() tea.Msg {
+		if p == nil {
+			return playProgressMsg{}
+		}
+		pos, err := p.PositionSeconds()
+		if err != nil {
+			return playProgressMsg{Err: err}
+		}
+		dur, err := p.DurationSeconds()
+		if err != nil {
+			return playProgressMsg{Pos: pos, Err: err}
+		}
+		return playProgressMsg{Pos: pos, Duration: dur}
+	}
+}
+
+func newProgressBar(width int) progress.Model {
+	if width < 10 {
+		width = 10
+	}
+	m := progress.New(
+		progress.WithSolidFill(string(colorAccent)),
+		progress.WithoutPercentage(),
+		progress.WithWidth(width),
+	)
+	m.EmptyColor = string(colorDivider)
+	return m
+}
+
+// generatePlayerBar renders the bottom now-playing bar:
 //
-//	line 1: thin divider
-//	line 2: ⏮  ⏸/▶  ⏭   title — artist
-//	line 3: key hints
+//	line 1: divider
+//	line 2: controls + track
+//	line 3: time + progress bar
+//	line 4: key hints
 func (m Model) generatePlayerBar(width int) string {
+	bg := lipgloss.NewStyle().Background(colorBg)
+
 	divider := lipgloss.NewStyle().
 		Foreground(colorDivider).
 		Background(colorBg).
@@ -33,7 +84,6 @@ func (m Model) generatePlayerBar(width int) string {
 	}
 	playBtn := m.zone.Mark("player_play", btnStyle.Render(playIcon))
 	nextBtn := m.zone.Mark("player_next", btnStyle.Render("⏭"))
-
 	controls := lipgloss.JoinHorizontal(lipgloss.Center, prevBtn, playBtn, nextBtn)
 
 	var trackInfo string
@@ -54,19 +104,10 @@ func (m Model) generatePlayerBar(width int) string {
 			Render("Nothing playing")
 	}
 
-	gap := lipgloss.NewStyle().Background(colorBg).Render("   ")
+	gap := bg.Render("   ")
 	middleLeft := lipgloss.JoinHorizontal(lipgloss.Center, controls, gap, trackInfo)
-
-	hints := lipgloss.NewStyle().
-		Foreground(colorSubtext).
-		Background(colorBg).
-		Render("space/p pause  ·  ←/→ seek ±5s  ·  n/b next/prev")
-
-	// Pad middle and hints to full width
 	middlePad := width - lipgloss.Width(middleLeft)
 	if middlePad < 0 {
-		middlePad = 0
-		// Truncate by rebuilding with a width budget
 		budget := width - lipgloss.Width(controls) - 3
 		if budget < 8 {
 			budget = 8
@@ -83,15 +124,58 @@ func (m Model) generatePlayerBar(width int) string {
 			middlePad = 0
 		}
 	}
-	middle := middleLeft + lipgloss.NewStyle().Background(colorBg).Render(strings.Repeat(" ", middlePad))
+	middle := middleLeft + bg.Render(strings.Repeat(" ", middlePad))
 
+	// Progress line
+	posLabel := formatClock(m.playPos)
+	durLabel := formatClock(m.playDuration)
+	timeStyle := lipgloss.NewStyle().Foreground(colorSubtext).Background(colorBg)
+	leftTime := timeStyle.Render(posLabel)
+	rightTime := timeStyle.Render(durLabel)
+
+	barWidth := width - lipgloss.Width(leftTime) - lipgloss.Width(rightTime) - 4
+	if barWidth < 8 {
+		barWidth = 8
+	}
+
+	pct := 0.0
+	if m.playDuration > 0 {
+		pct = m.playPos / m.playDuration
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 1 {
+			pct = 1
+		}
+	}
+
+	pb := m.progress
+	pb.Width = barWidth
+	bar := pb.ViewAs(pct)
+	progressLine := lipgloss.JoinHorizontal(lipgloss.Center,
+		leftTime,
+		" ",
+		bar,
+		" ",
+		rightTime,
+	)
+	progPad := width - lipgloss.Width(progressLine)
+	if progPad < 0 {
+		progPad = 0
+	}
+	progressLine += bg.Render(strings.Repeat(" ", progPad))
+
+	hints := lipgloss.NewStyle().
+		Foreground(colorSubtext).
+		Background(colorBg).
+		Render("j/k move  ·  enter play  ·  h/l cards  ·  ,/. seek  ·  \\ queue")
 	hintsPad := width - lipgloss.Width(hints)
 	if hintsPad < 0 {
 		hintsPad = 0
 	}
-	hintsLine := hints + lipgloss.NewStyle().Background(colorBg).Render(strings.Repeat(" ", hintsPad))
+	hintsLine := hints + bg.Render(strings.Repeat(" ", hintsPad))
 
-	return lipgloss.JoinVertical(lipgloss.Left, divider, middle, hintsLine)
+	return lipgloss.JoinVertical(lipgloss.Left, divider, middle, progressLine, hintsLine)
 }
 
 func trackLabel(t *Track) string {
@@ -102,4 +186,19 @@ func trackLabel(t *Track) string {
 		return fmt.Sprintf("%s — %s", t.Title, t.Artist)
 	}
 	return t.Title
+}
+
+func formatClock(seconds float64) string {
+	if seconds < 0 || seconds != seconds { // NaN
+		seconds = 0
+	}
+	total := int(seconds + 0.5)
+	m := total / 60
+	s := total % 60
+	if m >= 60 {
+		h := m / 60
+		m = m % 60
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
 }

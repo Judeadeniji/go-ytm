@@ -89,3 +89,26 @@ func (q *Queue) Len() int {
 func (q *Queue) IsEmpty() bool {
 	return len(q.tracks) == 0
 }
+
+// Tracks returns a copy of the queued tracks.
+func (q Queue) Tracks() []Track {
+	if len(q.tracks) == 0 {
+		return nil
+	}
+	out := make([]Track, len(q.tracks))
+	copy(out, q.tracks)
+	return out
+}
+
+// CurrentIndex returns the queue cursor (-1 if none).
+func (q Queue) CurrentIndex() int {
+	return q.current
+}
+
+// At returns the track at index i.
+func (q Queue) At(i int) (Track, bool) {
+	if i < 0 || i >= len(q.tracks) {
+		return Track{}, false
+	}
+	return q.tracks[i], true
+}

@@ -106,7 +106,8 @@ func (m Model) renderCarouselRow(index int, title string, cards []ytmapi.HomeCar
 	}
 
 	var blocks []string
-	for _, card := range visibleCards {
+	for vi, card := range visibleCards {
+		cardIndex := offset + vi
 		t := card.Title
 		if len(t) > 20 {
 			t = t[:17] + "..."
@@ -121,17 +122,26 @@ func (m Model) renderCarouselRow(index int, title string, cards []ytmapi.HomeCar
 			art = m.cachedArtAt(card.Thumbnails[0].URL, artWidth, artHeight)
 		}
 
+		titleColor := colorText
+		focused := m.focusedHomeCard(index, cardIndex)
+		bg := colorBg
+		if focused {
+			bg = colorFocusBg
+			titleColor = colorAccent
+		}
+
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			art, "",
-			lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(t),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render(s),
+			lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(t),
+			lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s),
 		)
 
 		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
 			content = m.zone.Mark(zid, content)
 		}
 
-		blocks = append(blocks, lipgloss.NewStyle().Padding(0, 2).Width(cardWidth).Render(content))
+		style := lipgloss.NewStyle().Padding(0, 2).Width(cardWidth).Background(bg)
+		blocks = append(blocks, style.Render(content))
 	}
 
 	row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
@@ -272,12 +282,16 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 		grouped[cat] = append(grouped[cat], res)
 	}
 
+	flatIdx := 0
 	for _, cat := range categories {
 		results := grouped[cat]
 		mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(cat))
 		mb.WriteString("\n\n")
 
 		for _, res := range results {
+			focused := m.focusedSearchResult(flatIdx)
+			flatIdx++
+
 			title := res.Title
 			badge := ""
 			if res.ResultType == "album" && res.Type != "" {
@@ -312,10 +326,20 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			if res.ItemCount != "" {
 				subParts = append(subParts, res.ItemCount+" tracks")
 			}
-			sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(subParts, " · "))
 
-			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
-			row := lipgloss.JoinVertical(lipgloss.Left, titleStyled, sub)
+			bg := colorBg
+			titleColor := colorText
+			prefix := "  "
+			if focused {
+				bg = colorFocusBg
+				titleColor = colorAccent
+				prefix = "› "
+			}
+
+			sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(strings.Join(subParts, " · "))
+			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(prefix + title)
+			row := lipgloss.JoinVertical(lipgloss.Left, titleStyled, lipgloss.NewStyle().Background(bg).Render("  "+sub))
+			row = lipgloss.NewStyle().Background(bg).Width(mainWidth - 4).Render(row)
 
 			zid := searchResultZone(res)
 			if zid != "" {
@@ -325,10 +349,9 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			mb.WriteString(row)
 			mb.WriteString("\n\n")
 		}
-			mb.WriteString("\n")
+		mb.WriteString("\n")
 	}
 
-	_ = mainWidth
 	return mb.String()
 }
 

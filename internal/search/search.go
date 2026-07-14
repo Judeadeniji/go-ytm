@@ -3,8 +3,11 @@ package search
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	youtube "github.com/kkdai/youtube/v2"
@@ -23,13 +26,32 @@ func NewExtractor() *Extractor {
 
 // GetStreamURL attempts to get the stream URL, falling back to yt-dlp if it fails
 func (e *Extractor) GetStreamURL(ctx context.Context, videoID string) (string, error) {
-	url, err := e.getStreamURLYoutubeClient(videoID)
-	if err == nil && url != "" {
+	url, primaryErr := e.getStreamURLYoutubeClient(videoID)
+	if primaryErr == nil && url != "" {
 		return url, nil
 	}
 
-	// Fallback to yt-dlp
-	return e.getStreamURLYtDlp(ctx, videoID)
+	url, fallbackErr := e.getStreamURLYtDlp(ctx, videoID)
+	if fallbackErr == nil && url != "" {
+		return url, nil
+	}
+
+	if primaryErr == nil {
+		primaryErr = errors.New("empty stream URL")
+	}
+	if fallbackErr == nil {
+		fallbackErr = errors.New("empty stream URL")
+	}
+
+	if isNotFound(fallbackErr) {
+		return "", fmt.Errorf("%w (yt-dlp fallback missing — install yt-dlp or add it to PATH)", primaryErr)
+	}
+	return "", fmt.Errorf("%w; yt-dlp fallback: %w", primaryErr, fallbackErr)
+}
+
+func isNotFound(err error) bool {
+	var e *exec.Error
+	return errors.As(err, &e) && e.Err == exec.ErrNotFound
 }
 
 func (e *Extractor) getStreamURLYoutubeClient(videoID string) (string, error) {
@@ -55,21 +77,67 @@ func (e *Extractor) getStreamURLYoutubeClient(videoID string) (string, error) {
 }
 
 func (e *Extractor) getStreamURLYtDlp(ctx context.Context, videoID string) (string, error) {
-	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-	cmd := exec.CommandContext(ctx, "yt-dlp", "-g", "-f", "bestaudio", url)
-	
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	
-	err := cmd.Run()
+	bin, err := lookPathYtDlp()
 	if err != nil {
+		return "", err
+	}
+
+	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
+	cmd := exec.CommandContext(ctx, bin, "-g", "-f", "bestaudio/bestaudio*/best", "--no-playlist", url)
+
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return "", fmt.Errorf("yt-dlp failed: %s", firstLine(msg))
+		}
 		return "", fmt.Errorf("yt-dlp failed: %w", err)
 	}
 
-	streamURL := strings.TrimSpace(out.String())
+	streamURL := firstLine(out.String())
 	if streamURL == "" {
 		return "", fmt.Errorf("yt-dlp returned empty URL")
 	}
 
 	return streamURL, nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// lookPathYtDlp finds yt-dlp on PATH or in common install locations.
+// Cursor/AppImage shells often omit ~/.local/bin even when the user has it installed.
+func lookPathYtDlp() (string, error) {
+	if p, err := exec.LookPath("yt-dlp"); err == nil {
+		return p, nil
+	}
+
+	home, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(home, ".local", "bin", "yt-dlp"),
+		"/usr/bin/yt-dlp",
+		"/usr/local/bin/yt-dlp",
+		"/opt/homebrew/bin/yt-dlp",
+	}
+
+	// Project-local copy (bin/yt-dlp next to the built TUI)
+	if exe, err := os.Executable(); err == nil {
+		candidates = append([]string{filepath.Join(filepath.Dir(exe), "yt-dlp")}, candidates...)
+	}
+
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return c, nil
+		}
+	}
+
+	return "", &exec.Error{Name: "yt-dlp", Err: exec.ErrNotFound}
 }
