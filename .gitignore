@@ -13,6 +13,8 @@
 /downloads/*
 !/downloads/.gitkeep
 
+.build_assets/
+
 # OS
 .DS_Store
 
