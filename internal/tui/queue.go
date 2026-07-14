@@ -104,6 +104,16 @@ func (q *Queue) TruncateAfterCurrent() {
 	}
 }
 
+// CapHistory keeps at most maxPlayed tracks before the current index.
+func (q *Queue) CapHistory(maxPlayed int) {
+	if maxPlayed < 0 || q.current <= maxPlayed {
+		return
+	}
+	drop := q.current - maxPlayed
+	q.tracks = append([]Track(nil), q.tracks[drop:]...)
+	q.current -= drop
+}
+
 // Clear empties the queue and resets the position.
 func (q *Queue) Clear() {
 	q.tracks = nil

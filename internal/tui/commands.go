@@ -13,8 +13,10 @@ import (
 
 // TrackStartedMsg is sent when a track has been successfully loaded and started.
 type TrackStartedMsg struct {
-	Track Track
-	Gen   int
+	Track       Track
+	Gen         int
+	Err         error
+	SeekOnlyErr bool // Err is seek-only; playback already started
 }
 
 // streamReadyMsg is the async result of resolving a stream URL for a play request.
@@ -32,11 +34,14 @@ func fetchStreamURL(ext *search.Extractor, videoID string) tea.Cmd {
 	}
 }
 
-// playTrack stops silence gap immediately via a separate Stop cmd; this cmd only
-// resolves the URL. Pair with stopPlayback in a Batch, then handle streamReadyMsg.
-func playTrack(ext *search.Extractor, t Track, gen int) tea.Cmd {
+// playTrack resolves a stream URL for t. Pair with stopPlayback via tea.Sequence
+// (not Batch) so Stop cannot race a subsequent Load.
+func playTrack(ext *search.Extractor, t Track, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		url, err := ext.GetStreamURL(context.Background(), t.VideoID)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		url, err := ext.GetStreamURL(ctx, t.VideoID)
 		return streamReadyMsg{Track: t, URL: url, Gen: gen, Err: err}
 	}
 }
@@ -44,38 +49,51 @@ func playTrack(ext *search.Extractor, t Track, gen int) tea.Cmd {
 // loadTrack loads a resolved URL into mpv and signals TrackStartedMsg.
 func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64) tea.Cmd {
 	return func() tea.Msg {
-		_ = p.Load(url)
-		_ = p.Play()
-		if seekTo > 1 {
-			_ = p.SeekAbsolute(seekTo)
+		if err := p.Load(url); err != nil {
+			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
-		return TrackStartedMsg{Track: t, Gen: gen}
+		if err := p.Play(); err != nil {
+			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
+		}
+		var seekErr error
+		if seekTo > 1 {
+			seekErr = p.SeekAbsolute(seekTo)
+		}
+		return TrackStartedMsg{Track: t, Gen: gen, Err: seekErr, SeekOnlyErr: seekErr != nil}
 	}
 }
 
 // trackEndedMsg is raised when mpv fires an end-file event.
 type trackEndedMsg struct {
 	Reason string
+	Closed bool // Events channel closed (mpv IPC gone)
 }
 
 // listenTrackEnded waits for the next mpv end-file event.
 func listenTrackEnded(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
 		if p == nil {
-			return nil
+			return trackEndedMsg{Closed: true}
 		}
 		ev, ok := <-p.Events()
 		if !ok {
-			return nil
+			return trackEndedMsg{Closed: true}
 		}
 		return trackEndedMsg{Reason: ev.Reason}
 	}
 }
 
+type playerErrMsg struct {
+	Op  string
+	Err error
+}
+
 // togglePause sends a pause-cycle command to mpv.
 func togglePause(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
-		p.TogglePause()
+		if err := p.TogglePause(); err != nil {
+			return playerErrMsg{Op: "pause", Err: err}
+		}
 		return nil
 	}
 }
@@ -83,33 +101,42 @@ func togglePause(p *player.Player) tea.Cmd {
 // seekCmd sends a relative seek command to mpv.
 func seekCmd(p *player.Player, seconds float64) tea.Cmd {
 	return func() tea.Msg {
-		p.SeekRelative(seconds)
+		if err := p.SeekRelative(seconds); err != nil {
+			return playerErrMsg{Op: "seek", Err: err}
+		}
 		return nil
 	}
 }
 
 func stopPlayback(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
-		p.Stop()
+		if err := p.Stop(); err != nil {
+			return playerErrMsg{Op: "stop", Err: err}
+		}
 		return nil
 	}
 }
 
 func loadAndPlay(p *player.Player, url string) tea.Cmd {
 	return func() tea.Msg {
-		p.Load(url)
-		p.Play()
+		if err := p.Load(url); err != nil {
+			return playerErrMsg{Op: "load", Err: err}
+		}
+		if err := p.Play(); err != nil {
+			return playerErrMsg{Op: "play", Err: err}
+		}
 		return nil
 	}
 }
 
 type SearchResultsMsg struct {
 	Results []ytmapi.SearchResult
+	Gen     int
 	Err     error
 }
 
-func doSearch(apiClient *ytmapi.Client, query string) tea.Cmd {
-	return doSearchFiltered(apiClient, query, "")
+func doSearch(apiClient *ytmapi.Client, query string, gen int) tea.Cmd {
+	return doSearchFiltered(apiClient, query, "", gen)
 }
 
 type SearchSuggestionsMsg struct {
@@ -133,11 +160,14 @@ func debounceSuggestions(query string, gen int) tea.Cmd {
 	})
 }
 
-func fetchSuggestions(apiClient *ytmapi.Client, query string, gen int) tea.Cmd {
+func fetchSuggestions(apiClient *ytmapi.Client, query string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		q := strings.TrimSpace(query)
 		if q == "" {
 			return SearchSuggestionsMsg{Query: query, Gen: gen}
+		}
+		if ctx == nil {
+			ctx = context.Background()
 		}
 
 		type sugOut struct {
@@ -151,15 +181,28 @@ func fetchSuggestions(apiClient *ytmapi.Client, query string, gen int) tea.Cmd {
 		sugCh := make(chan sugOut, 1)
 		resCh := make(chan resOut, 1)
 		go func() {
-			items, err := apiClient.GetSearchSuggestions(q)
+			items, err := apiClient.GetSearchSuggestions(ctx, q)
 			sugCh <- sugOut{items, err}
 		}()
 		go func() {
-			items, err := apiClient.SearchFiltered(q, "", 5)
+			items, err := apiClient.SearchFiltered(ctx, q, "", 5)
 			resCh <- resOut{items, err}
 		}()
-		sug := <-sugCh
-		res := <-resCh
+
+		var sug sugOut
+		var res resOut
+		for sugCh != nil || resCh != nil {
+			select {
+			case <-ctx.Done():
+				return SearchSuggestionsMsg{Query: query, Gen: gen, Err: ctx.Err()}
+			case s := <-sugCh:
+				sug = s
+				sugCh = nil
+			case r := <-resCh:
+				res = r
+				resCh = nil
+			}
+		}
 
 		if sug.err != nil && res.err != nil {
 			return SearchSuggestionsMsg{Query: query, Gen: gen, Err: sug.err}
@@ -181,7 +224,7 @@ type HomeMsg struct {
 
 func fetchHome(apiClient *ytmapi.Client) tea.Cmd {
 	return func() tea.Msg {
-		carousels, err := apiClient.GetHome()
+		carousels, err := apiClient.GetHome(context.Background())
 		return HomeMsg{Carousels: carousels, Err: err}
 	}
 }

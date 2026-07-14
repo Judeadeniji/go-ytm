@@ -221,11 +221,9 @@ func (m Model) renderSuggestionEntity(i int, s SearchSuggestion, inner int) stri
 func (m Model) activateSuggestion() (Model, tea.Cmd) {
 	if m.listCursor < 0 || m.listCursor >= len(m.searchSuggestions) {
 		query := m.searchInput.Value()
-		m.lastSearchQuery = query
-		m.statusMsg = "Searching for: " + query
 		m.searchInput.Blur()
 		m.markSessionDirty()
-		return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter)
+		return m.beginSearch(query)
 	}
 	s := m.searchSuggestions[m.listCursor]
 	m.searchInput.Blur()
@@ -242,10 +240,8 @@ func (m Model) activateSuggestion() (Model, tea.Cmd) {
 	}
 
 	m.searchInput.SetValue(s.Text)
-	m.lastSearchQuery = s.Text
-	m.statusMsg = "Searching for: " + s.Text
 	m.markSessionDirty()
-	return m, doSearchFiltered(m.ytmapiClient, s.Text, m.searchFilter)
+	return m.beginSearch(s.Text)
 }
 
 func entityArtistHint(s SearchSuggestion) string {
@@ -257,7 +253,7 @@ func entityArtistHint(s SearchSuggestion) string {
 	return ""
 }
 
-func (m Model) enqueueSuggestionImages() tea.Cmd {
+func (m *Model) enqueueSuggestionImages() tea.Cmd {
 	var cmds []tea.Cmd
 	seen := map[string]struct{}{}
 	for _, s := range m.searchSuggestions {
@@ -273,7 +269,7 @@ func (m Model) enqueueSuggestionImages() tea.Cmd {
 			continue
 		}
 		ph := KittyImage{Spacer: sizedPlaceholder(sugArtWidth, sugArtHeight)}
-		m.imageCache[key] = &ph
+		m.putImageCache(key, &ph)
 		cmds = append(cmds, fetchImageSized(s.ThumbURL, sugArtWidth, sugArtHeight))
 	}
 	if len(cmds) == 0 {

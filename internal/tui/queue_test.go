@@ -35,3 +35,28 @@ func TestTruncateAfterCurrent(t *testing.T) {
 		t.Fatalf("len=%d want 1", q.Len())
 	}
 }
+
+func TestCapHistory(t *testing.T) {
+	var q Queue
+	tracks := make([]Track, 10)
+	for i := range tracks {
+		tracks[i] = Track{VideoID: string(rune('a' + i))}
+	}
+	q.SetFrom(tracks, 0)
+	for i := 0; i < 7; i++ {
+		q.Next()
+	}
+	q.CapHistory(3)
+	if q.CurrentIndex() != 3 {
+		t.Fatalf("current=%d want 3", q.CurrentIndex())
+	}
+	if q.Len() != 6 { // 3 before + current + 2 after (10-7=3 remaining after start at 7... wait)
+		// Started at 0, advanced 7 times → current=7, len=10
+		// CapHistory(3): drop = 7-3 = 4, new current=3, new len=6
+		t.Fatalf("len=%d want 6", q.Len())
+	}
+	cur, ok := q.Current()
+	if !ok || cur.VideoID != string(rune('a'+7)) {
+		t.Fatalf("current=%v ok=%v", cur, ok)
+	}
+}

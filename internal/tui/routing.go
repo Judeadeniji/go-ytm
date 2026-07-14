@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,68 +11,73 @@ import (
 type ArtistMsg struct {
 	Page      *ytmapi.ArtistPage
 	RequestID string
+	Gen       int
 	Err       error
 }
 
 type AlbumMsg struct {
 	Page     *ytmapi.AlbumPage
 	BrowseID string
+	Gen      int
 	Err      error
 }
 
 type PlaylistMsg struct {
 	Page *ytmapi.PlaylistPage
+	Gen  int
 	Err  error
 }
 
 type WatchMsg struct {
-	Watch *ytmapi.WatchPlaylist
-	Err   error
+	Watch       *ytmapi.WatchPlaylist
+	Gen         int
+	SeedVideoID string
+	Err         error
 }
 
-func fetchArtist(api *ytmapi.Client, channelID string) tea.Cmd {
+func fetchArtist(api *ytmapi.Client, channelID string, gen int) tea.Cmd {
 	return func() tea.Msg {
-		page, err := api.GetArtist(channelID)
-		return ArtistMsg{Page: page, RequestID: channelID, Err: err}
+		page, err := api.GetArtist(context.Background(), channelID)
+		return ArtistMsg{Page: page, RequestID: channelID, Gen: gen, Err: err}
 	}
 }
 
-func fetchAlbum(api *ytmapi.Client, browseID string) tea.Cmd {
+func fetchAlbum(api *ytmapi.Client, browseID string, gen int) tea.Cmd {
 	return func() tea.Msg {
-		page, err := api.GetAlbum(browseID)
-		return AlbumMsg{Page: page, BrowseID: browseID, Err: err}
+		page, err := api.GetAlbum(context.Background(), browseID)
+		return AlbumMsg{Page: page, BrowseID: browseID, Gen: gen, Err: err}
 	}
 }
 
-func fetchAlbumFromAudioPlaylist(api *ytmapi.Client, audioPlaylistID string) tea.Cmd {
+func fetchAlbumFromAudioPlaylist(api *ytmapi.Client, audioPlaylistID string, gen int) tea.Cmd {
 	return func() tea.Msg {
-		browseID, err := api.GetAlbumBrowseID(audioPlaylistID)
+		browseID, err := api.GetAlbumBrowseID(context.Background(), audioPlaylistID)
 		if err != nil {
-			return AlbumMsg{Err: err}
+			return AlbumMsg{Gen: gen, Err: err}
 		}
-		page, err := api.GetAlbum(browseID)
-		return AlbumMsg{Page: page, BrowseID: browseID, Err: err}
+		page, err := api.GetAlbum(context.Background(), browseID)
+		return AlbumMsg{Page: page, BrowseID: browseID, Gen: gen, Err: err}
 	}
 }
 
-func fetchPlaylist(api *ytmapi.Client, playlistID string) tea.Cmd {
+func fetchPlaylist(api *ytmapi.Client, playlistID string, gen int) tea.Cmd {
 	return func() tea.Msg {
-		page, err := api.GetPlaylist(playlistID, 100)
-		return PlaylistMsg{Page: page, Err: err}
+		page, err := api.GetPlaylist(context.Background(), playlistID, 100)
+		return PlaylistMsg{Page: page, Gen: gen, Err: err}
 	}
 }
 
-func fetchWatch(api *ytmapi.Client, videoID, playlistID string, radio bool) tea.Cmd {
+func fetchWatch(api *ytmapi.Client, videoID, playlistID string, radio bool, gen int) tea.Cmd {
 	return func() tea.Msg {
-		w, err := api.GetWatchPlaylist(videoID, playlistID, radio, 25)
-		return WatchMsg{Watch: w, Err: err}
+		w, err := api.GetWatchPlaylist(context.Background(), videoID, playlistID, radio, 25)
+		return WatchMsg{Watch: w, Gen: gen, SeedVideoID: videoID, Err: err}
 	}
 }
 
-func doSearchFiltered(api *ytmapi.Client, query, filter string) tea.Cmd {
+func doSearchFiltered(api *ytmapi.Client, query, filter string, gen int) tea.Cmd {
 	return func() tea.Msg {
-		results, err := api.SearchFiltered(query, filter, 30)
-		return SearchResultsMsg{Results: results, Err: err}
+		results, err := api.SearchFiltered(context.Background(), query, filter, 30)
+		return SearchResultsMsg{Results: results, Gen: gen, Err: err}
 	}
 }
 

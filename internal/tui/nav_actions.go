@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -58,6 +59,7 @@ func (m *Model) applyLayout() {
 }
 
 func (m Model) beginOpen(status string) Model {
+	m.navGen++
 	m.pageLoading = true
 	m.pageErr = ""
 	m.statusMsg = status
@@ -65,34 +67,38 @@ func (m Model) beginOpen(status string) Model {
 	return m
 }
 
+func (m Model) beginSearch(query string) (Model, tea.Cmd) {
+	m.navGen++
+	m.pageLoading = true
+	m.pageErr = ""
+	m.lastSearchQuery = query
+	m.statusMsg = "Searching…"
+	m.setMainContent()
+	return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter, m.navGen)
+}
+
 func (m Model) openArtist(channelID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading artist…")
-	return m, fetchArtist(m.ytmapiClient, channelID)
+	return m, fetchArtist(m.ytmapiClient, channelID, m.navGen)
 }
 
 func (m Model) openAlbum(browseID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading album…")
-	return m, fetchAlbum(m.ytmapiClient, browseID)
+	return m, fetchAlbum(m.ytmapiClient, browseID, m.navGen)
 }
 
 func (m Model) openOlak(audioPlaylistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading album…")
-	return m, fetchAlbumFromAudioPlaylist(m.ytmapiClient, audioPlaylistID)
+	return m, fetchAlbumFromAudioPlaylist(m.ytmapiClient, audioPlaylistID, m.navGen)
 }
 
 func (m Model) openPlaylist(playlistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading playlist…")
-	return m, fetchPlaylist(m.ytmapiClient, playlistID)
+	return m, fetchPlaylist(m.ytmapiClient, playlistID, m.navGen)
 }
 
 func (m Model) goHome() Model {
-	m.stack.Clear()
-	m.searchResults = nil
-	m.artistPage = nil
-	m.albumPage = nil
-	m.playlistPage = nil
-	m.pageLoading = false
-	m.pageErr = ""
+	m = m.leaveDetailPages()
 	m.activeMenu = "Home"
 	m.markSessionDirty()
 	m.setMainContent()
@@ -100,7 +106,21 @@ func (m Model) goHome() Model {
 	return m
 }
 
+// leaveDetailPages invalidates in-flight page/search fetches and clears detail state.
+func (m Model) leaveDetailPages() Model {
+	m.navGen++
+	m.stack.Clear()
+	m.searchResults = nil
+	m.artistPage = nil
+	m.albumPage = nil
+	m.playlistPage = nil
+	m.pageLoading = false
+	m.pageErr = ""
+	return m
+}
+
 func (m Model) popNav() Model {
+	m.navGen++
 	if _, ok := m.stack.Pop(); ok {
 		// Clear page data for the screen we left; keep parent data if stack still has pages.
 		if sc, ok := m.stack.Current(); ok {
@@ -183,6 +203,9 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	m.playDuration = 0
 	m.playGen++
 	gen := m.playGen
+	m.cancelPlayExtract()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.playCancel = cancel
 	m.queueCursor = m.queue.CurrentIndex()
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
@@ -195,14 +218,14 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	m.markSessionDirty()
 
 	cmds := []tea.Cmd{
-		stopPlayback(m.player),
-		playTrack(m.extractor, t, gen),
+		playTrack(m.extractor, t, gen, ctx),
 		m.enqueueVisibleImages(m.mainWidth()),
 	}
 	if seedWatch {
-		cmds = append(cmds, fetchWatch(m.ytmapiClient, t.VideoID, watchPlaylistID, false))
+		cmds = append(cmds, fetchWatch(m.ytmapiClient, t.VideoID, watchPlaylistID, false, gen))
 	}
-	return m, tea.Batch(cmds...)
+	// Stop must finish before extract/load so a concurrent Stop can't kill the new track.
+	return m, tea.Sequence(stopPlayback(m.player), tea.Batch(cmds...))
 }
 
 func (m Model) togglePlayPause() (Model, tea.Cmd) {
@@ -216,12 +239,15 @@ func (m Model) togglePlayPause() (Model, tea.Cmd) {
 		m.isPlaying = true
 		m.playGen++
 		gen := m.playGen
+		m.cancelPlayExtract()
+		ctx, cancel := context.WithCancel(context.Background())
+		m.playCancel = cancel
 		m.statusMsg = "Resuming: " + t.Title
 		m.markSessionDirty()
 		if m.onTracklistScreen() {
 			m.setMainContent()
 		}
-		return m, playTrack(m.extractor, t, gen)
+		return m, playTrack(m.extractor, t, gen, ctx)
 	}
 	m.isPlaying = !m.isPlaying
 	m.markSessionDirty()
@@ -261,8 +287,8 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 				m.setMainContent()
 				return m, nil, true
 			}
-			m.statusMsg = "Searching…"
-			return m, doSearchFiltered(m.ytmapiClient, q, f), true
+			mm, cmd := m.beginSearch(q)
+			return mm, cmd, true
 		}
 	}
 
@@ -409,5 +435,8 @@ func thumbURL(thumbs []ytmapi.Thumbnail) string {
 }
 
 func fmtErr(err error) string {
+	if err == nil {
+		return ""
+	}
 	return fmt.Sprintf("%v", err)
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	termimg "github.com/blacktop/go-termimg"
 	"github.com/charmbracelet/lipgloss"
@@ -56,6 +57,12 @@ const (
 
 func imageCacheKey(url string, width, height int) string {
 	return fmt.Sprintf("%s@%dx%d", url, width, height)
+}
+
+const maxImageBytes = 5 << 20 // 5 MiB
+
+var imageHTTPClient = &http.Client{
+	Timeout: 8 * time.Second,
 }
 
 // artPlaceholder returns a fixed-size grey box used while thumbs load / on error.
@@ -127,7 +134,7 @@ func RenderLocalImage(filepath string, width, height, _ int) KittyImage {
 
 // RenderRemoteImage downloads a URL and renders it as a terminal image.
 func RenderRemoteImage(url string, width, height, _ int) KittyImage {
-	resp, err := http.Get(url)
+	resp, err := imageHTTPClient.Get(url)
 	if err != nil {
 		return fallbackKitty(width, height)
 	}
@@ -138,7 +145,10 @@ func RenderRemoteImage(url string, width, height, _ int) KittyImage {
 	}
 
 	buf := new(bytes.Buffer)
-	if _, err = buf.ReadFrom(resp.Body); err != nil {
+	if _, err = buf.ReadFrom(io.LimitReader(resp.Body, maxImageBytes+1)); err != nil {
+		return fallbackKitty(width, height)
+	}
+	if buf.Len() > maxImageBytes {
 		return fallbackKitty(width, height)
 	}
 

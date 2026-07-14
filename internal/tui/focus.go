@@ -214,22 +214,27 @@ func (m *Model) ensureListCursorInView(headerLines, rowHeight int) {
 }
 
 func (m *Model) ensureQueueCursorInView() {
-	// Approximate: header (~18 lines) + 2 lines per track from (current-1).
+	// Approximate layout: now-playing card (~18) + queue header (~3)
+	// + optional played block + divider (~3) + 3 lines per track.
 	viewH := m.rightViewport.Height
 	if viewH <= 0 {
 		return
 	}
 	cur := m.queue.CurrentIndex()
-	start := 0
+	headerLines := 21
+	cursorLine := headerLines
 	if cur > 0 {
-		start = cur - 1
+		// played rows before divider
+		played := cur
+		if m.queueCursor < cur {
+			cursorLine += m.queueCursor * 3
+		} else {
+			cursorLine += played*3 + 3 // divider + "Up next" label
+			cursorLine += (m.queueCursor - cur) * 3
+		}
+	} else {
+		cursorLine += m.queueCursor * 3
 	}
-	rel := m.queueCursor - start
-	if rel < 0 {
-		rel = 0
-	}
-	headerLines := 18
-	cursorLine := headerLines + rel*3
 	top := m.rightViewport.YOffset
 	bottom := top + viewH - 1
 	if cursorLine < top {
@@ -253,13 +258,7 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 			return m, m.enqueueVisibleImages(m.mainWidth())
 		}
 		m.activeMenu = item
-		m.stack.Clear()
-		m.searchResults = nil
-		m.artistPage = nil
-		m.albumPage = nil
-		m.playlistPage = nil
-		m.pageLoading = false
-		m.pageErr = ""
+		m = m.leaveDetailPages()
 		m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 		m.setMainContent()
 		m.mainViewport.YOffset = 0

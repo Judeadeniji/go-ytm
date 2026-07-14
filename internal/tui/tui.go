@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,12 +35,14 @@ type Model struct {
 	carouselOffsets   map[string]int
 	cachedArt         *KittyImage
 	imageCache        map[string]*KittyImage
+	imageCacheOrder   []string // oldest-first keys for LRU eviction
 	mainViewport      viewport.Model
 	leftViewport      viewport.Model
 	rightViewport     viewport.Model
 	searchInput       textinput.Model
 	searchSuggestions []SearchSuggestion
 	suggestionGen     int // bumps on each query change; ignores stale fetches
+	sugCancel         context.CancelFunc
 	zone              *zone.Manager
 
 	searchResults    []ytmapi.SearchResult
@@ -59,9 +63,11 @@ type Model struct {
 	playDuration     float64
 	queuePanelHidden bool // user dismissed the right rail
 	playGen          int  // bumped on each play request; ignores stale extracts
+	playCancel       context.CancelFunc
 
 	// Navigation / detail pages
 	stack        ViewStack
+	navGen       int // bumped on each page/search fetch; ignores stale replies
 	pageLoading  bool
 	pageErr      string
 	artistPage   *ytmapi.ArtistPage
@@ -94,7 +100,12 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 	ti.CharLimit = 156
 	ti.Width = 56 // Leave room for padding
 
-	store, _ := library.Open()
+	store, err := library.Open()
+	status := "Ready"
+	if err != nil {
+		status = "Session store unavailable"
+		store = nil
+	}
 
 	return Model{
 		activePane:     PaneMain,
@@ -126,7 +137,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 		ytmapiClient:      apiClient,
 		player:            p,
 		extractor:         ext,
-		statusMsg:         "Ready",
+		statusMsg:         status,
 		queue:             Queue{current: -1},
 		progress:          newProgressBar(40),
 		sessionStore:      store,
@@ -177,6 +188,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if newVal != oldVal {
 				m.listCursor = 0
 				m.suggestionGen++
+				m.cancelSuggestions()
 				if strings.TrimSpace(newVal) == "" {
 					m.searchSuggestions = nil
 					return m, cmd
@@ -188,8 +200,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
+			m.cancelPlayExtract()
+			m.cancelSuggestions()
 			m.markSessionDirty()
-			return m, tea.Sequence(saveSession(m.sessionStore, m.snapshot()), tea.Quit)
+			return m, tea.Sequence(
+				saveSession(m.sessionStore, m.snapshot()),
+				closeSession(m.sessionStore),
+				tea.Quit,
+			)
 		case "esc":
 			m = m.popNav()
 			m.markSessionDirty()
@@ -239,6 +257,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.activateFocused()
 		case "s":
+			m.playGen++
+			m.cancelPlayExtract()
 			m.statusMsg = "Stopped playback"
 			m.isPlaying = false
 			m.audioLoaded = false
@@ -315,6 +335,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Gen != 0 && msg.Gen != m.playGen {
 			return m, nil // superseded by a newer skip
 		}
+		if msg.Err != nil && !msg.SeekOnlyErr {
+			m.isPlaying = false
+			m.audioLoaded = false
+			m.statusMsg = shortStreamErr(msg.Err)
+			return m, nil
+		}
 		m.currentTrack = &msg.Track
 		m.isPlaying = true
 		m.audioLoaded = true
@@ -325,7 +351,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resumeSeek = 0
 		m.playDuration = 0
-		m.statusMsg = "Playing: " + msg.Track.Title
+		if msg.SeekOnlyErr {
+			m.statusMsg = "Playing (seek failed): " + msg.Track.Title
+		} else {
+			m.statusMsg = "Playing: " + msg.Track.Title
+		}
 		m.markSessionDirty()
 		if m.onTracklistScreen() {
 			m = m.syncTrackCursorToPlaying()
@@ -342,11 +372,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setQueuePanelContent()
 		return m, tea.Batch(fetchPlayProgress(m.player), m.enqueueVisibleImages(m.mainWidth()))
+	case playerErrMsg:
+		if msg.Err != nil {
+			if msg.Op == "pause" {
+				m.isPlaying = !m.isPlaying
+				if m.onTracklistScreen() {
+					m.setMainContent()
+				}
+			}
+			op := msg.Op
+			if op == "" {
+				op = "player"
+			}
+			m.statusMsg = fmt.Sprintf("%s failed: %v", op, msg.Err)
+		}
+		return m, nil
 	case streamReadyMsg:
 		if msg.Gen != m.playGen {
 			return m, nil // user already skipped ahead
 		}
 		if msg.Err != nil {
+			if errors.Is(msg.Err, context.Canceled) {
+				return m, nil
+			}
 			m.statusMsg = shortStreamErr(msg.Err)
 			m.isPlaying = false
 			return m, nil
@@ -377,6 +425,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionSavedMsg:
 		return m, nil
 	case trackEndedMsg:
+		if msg.Closed {
+			m.statusMsg = "Playback engine disconnected"
+			m.isPlaying = false
+			return m, nil
+		}
 		// Always re-arm the listener; only natural EOF advances the queue.
 		// loadfile/stop emit reason "stop" (or similar) — ignore those.
 		rearm := listenTrackEnded(m.player)
@@ -416,6 +469,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Playing audio!"
 		return m, loadAndPlay(m.player, msg.URL)
 	case SearchResultsMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Search error: %v", msg.Err)
 			m.pageLoading = false
@@ -435,9 +491,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case ArtistMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
 		m.pageLoading = false
-		if msg.Err != nil {
+		if msg.Err != nil || msg.Page == nil {
 			m.pageErr = fmtErr(msg.Err)
+			if msg.Page == nil && msg.Err == nil {
+				m.pageErr = "empty artist response"
+			}
 			m.statusMsg = "Artist unavailable"
 			m.setMainContent()
 			return m, nil
@@ -456,9 +518,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case AlbumMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
 		m.pageLoading = false
-		if msg.Err != nil {
+		if msg.Err != nil || msg.Page == nil {
 			m.pageErr = fmtErr(msg.Err)
+			if msg.Page == nil && msg.Err == nil {
+				m.pageErr = "empty album response"
+			}
 			m.statusMsg = "Album unavailable"
 			m.setMainContent()
 			return m, nil
@@ -474,9 +542,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case PlaylistMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
 		m.pageLoading = false
-		if msg.Err != nil {
+		if msg.Err != nil || msg.Page == nil {
 			m.pageErr = fmtErr(msg.Err)
+			if msg.Page == nil && msg.Err == nil {
+				m.pageErr = "empty playlist response"
+			}
 			m.statusMsg = "Playlist unavailable"
 			m.setMainContent()
 			return m, nil
@@ -492,7 +566,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case WatchMsg:
+		if msg.Gen != 0 && msg.Gen != m.playGen {
+			return m, nil
+		}
+		if msg.SeedVideoID != "" && (m.currentTrack == nil || m.currentTrack.VideoID != msg.SeedVideoID) {
+			return m, nil
+		}
 		if msg.Err != nil || msg.Watch == nil {
+			if msg.Err != nil {
+				m.statusMsg = "Radio unavailable"
+			}
 			return m, nil
 		}
 		// Replace upcoming with watch tracks that come *after* the current
@@ -521,6 +604,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			seen[tr.VideoID] = struct{}{}
 			m.queue.Add(trackFromAPI(tr))
 		}
+		m.queue.CapHistory(maxQueueHistory)
 		m.markSessionDirty()
 		m.applyLayout()
 		m.setQueuePanelContent()
@@ -544,7 +628,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h <= 0 {
 			h = artHeight
 		}
-		m.imageCache[imageCacheKey(msg.URL, w, h)] = msg.Kitty
+		m.putImageCache(imageCacheKey(msg.URL, w, h), msg.Kitty)
 		// Debounce grid rebuild so a burst of finishes doesn't reshape N times.
 		if !m.imageDirty {
 			m.imageDirty = true
@@ -561,7 +645,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Gen != m.suggestionGen || msg.Query != m.searchInput.Value() {
 			return m, nil
 		}
-		return m, fetchSuggestions(m.ytmapiClient, msg.Query, msg.Gen)
+		m.cancelSuggestions()
+		ctx, cancel := context.WithCancel(context.Background())
+		m.sugCancel = cancel
+		return m, fetchSuggestions(m.ytmapiClient, msg.Query, msg.Gen, ctx)
 	case SearchSuggestionsMsg:
 		// Ignore stale responses from older keystrokes.
 		if msg.Gen != 0 && msg.Gen != m.suggestionGen {
@@ -571,6 +658,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Err != nil {
+			if errors.Is(msg.Err, context.Canceled) {
+				return m, nil
+			}
 			m.statusMsg = "Suggestions unavailable"
 			return m, nil
 		}
@@ -621,13 +711,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, m.enqueueVisibleImages(m.mainWidth())
 					}
 					m.activeMenu = item
-					m.stack.Clear()
-					m.searchResults = nil
-					m.artistPage = nil
-					m.albumPage = nil
-					m.playlistPage = nil
-					m.pageLoading = false
-					m.pageErr = ""
+					m = m.leaveDetailPages()
 					m.markSessionDirty()
 					m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 					m.setMainContent()
@@ -723,6 +807,9 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.playDuration = 0
 	m.playGen++
 	gen := m.playGen
+	m.cancelPlayExtract()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.playCancel = cancel
 	m.queueCursor = m.queue.CurrentIndex()
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
@@ -733,11 +820,13 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.applyLayout()
 	m.setQueuePanelContent()
 	m.markSessionDirty()
-	// Stop immediately so the previous track doesn't keep playing during extract.
-	return m, tea.Batch(
+	// Stop must finish before extract/load so a concurrent Stop can't kill the new track.
+	return m, tea.Sequence(
 		stopPlayback(m.player),
-		playTrack(m.extractor, t, gen),
-		m.enqueueVisibleImages(m.mainWidth()),
+		tea.Batch(
+			playTrack(m.extractor, t, gen, ctx),
+			m.enqueueVisibleImages(m.mainWidth()),
+		),
 	)
 }
 
@@ -759,7 +848,7 @@ func (m Model) nextPane() Pane {
 
 // enqueueVisibleImages fetches thumbs for the active view (home cards, search,
 // playlist/album cover + track thumbs), keyed by size so layout stays stable.
-func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
+func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 	const maxSearchThumbs = 8
 
 	var cmds []tea.Cmd
@@ -778,7 +867,7 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			return
 		}
 		ph := KittyImage{Spacer: sizedPlaceholder(width, height)}
-		m.imageCache[key] = &ph
+		m.putImageCache(key, &ph)
 		cmds = append(cmds, fetchImageSized(url, width, height))
 	}
 
@@ -849,4 +938,48 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 		return nil
 	}
 	return tea.Batch(cmds...)
+}
+
+const (
+	imageCacheMax    = 128
+	maxQueueHistory  = 50
+)
+
+func (m *Model) cancelPlayExtract() {
+	if m.playCancel != nil {
+		m.playCancel()
+		m.playCancel = nil
+	}
+}
+
+func (m *Model) cancelSuggestions() {
+	if m.sugCancel != nil {
+		m.sugCancel()
+		m.sugCancel = nil
+	}
+}
+
+func (m *Model) putImageCache(key string, img *KittyImage) {
+	if m.imageCache == nil {
+		m.imageCache = make(map[string]*KittyImage)
+	}
+	if _, exists := m.imageCache[key]; exists {
+		// Refresh LRU position.
+		for i, k := range m.imageCacheOrder {
+			if k == key {
+				m.imageCacheOrder = append(m.imageCacheOrder[:i], m.imageCacheOrder[i+1:]...)
+				break
+			}
+		}
+		m.imageCacheOrder = append(m.imageCacheOrder, key)
+		m.imageCache[key] = img
+		return
+	}
+	for len(m.imageCache) >= imageCacheMax && len(m.imageCacheOrder) > 0 {
+		oldest := m.imageCacheOrder[0]
+		m.imageCacheOrder = m.imageCacheOrder[1:]
+		delete(m.imageCache, oldest)
+	}
+	m.imageCache[key] = img
+	m.imageCacheOrder = append(m.imageCacheOrder, key)
 }

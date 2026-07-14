@@ -38,6 +38,16 @@ func saveSession(db *library.DB, snap session.Snapshot) tea.Cmd {
 	}
 }
 
+func closeSession(db *library.DB) tea.Cmd {
+	return func() tea.Msg {
+		if db == nil {
+			return nil
+		}
+		_ = db.Close()
+		return nil
+	}
+}
+
 func tickSessionPersist() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return sessionPersistTickMsg(t)
@@ -161,20 +171,23 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 
 	// Re-fetch the top of the stack so the page is live again.
 	if sc, ok := m.stack.Current(); ok && sc.ID != "" {
+		m.navGen++
 		m.pageLoading = true
 		switch sc.Kind {
 		case ScreenArtist:
-			return fetchArtist(m.ytmapiClient, sc.ID)
+			return fetchArtist(m.ytmapiClient, sc.ID, m.navGen)
 		case ScreenAlbum:
-			return fetchAlbum(m.ytmapiClient, sc.ID)
+			return fetchAlbum(m.ytmapiClient, sc.ID, m.navGen)
 		case ScreenPlaylist:
-			return fetchPlaylist(m.ytmapiClient, sc.ID)
+			return fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen)
 		}
 	}
 
 	if m.lastSearchQuery != "" && m.stack.IsHome() && snap.ShowSearch {
+		m.navGen++
+		m.pageLoading = true
 		// Prefer restoring a prior search results list over empty home.
-		return doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter)
+		return doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen)
 	}
 	return nil
 }
