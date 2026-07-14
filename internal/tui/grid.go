@@ -118,9 +118,7 @@ func (m Model) renderCarouselRow(index int, title string, cards []ytmapi.HomeCar
 
 		art := artPlaceholder()
 		if len(card.Thumbnails) > 0 {
-			if kitty, ok := m.imageCache[card.Thumbnails[0].URL]; ok && kitty != nil && kitty.Spacer != "" {
-				art = kitty.Spacer
-			}
+			art = m.cachedArtAt(card.Thumbnails[0].URL, artWidth, artHeight)
 		}
 
 		content := lipgloss.JoinVertical(lipgloss.Left,

@@ -99,8 +99,10 @@ func fetchHome(apiClient *ytmapi.Client) tea.Cmd {
 }
 
 type ImageLoadedMsg struct {
-	URL   string
-	Kitty *KittyImage
+	URL    string
+	Width  int
+	Height int
+	Kitty  *KittyImage
 }
 
 func hashString(s string) int {
@@ -118,10 +120,14 @@ func hashString(s string) int {
 }
 
 func fetchImage(url string) tea.Cmd {
+	return fetchImageSized(url, artWidth, artHeight)
+}
+
+func fetchImageSized(url string, width, height int) tea.Cmd {
 	return func() tea.Msg {
-		id := hashString(url)
-		kitty := RenderRemoteImage(url, artWidth, artHeight, id)
-		return ImageLoadedMsg{URL: url, Kitty: &kitty}
+		id := hashString(imageCacheKey(url, width, height))
+		kitty := RenderRemoteImage(url, width, height, id)
+		return ImageLoadedMsg{URL: url, Width: width, Height: height, Kitty: &kitty}
 	}
 }
 

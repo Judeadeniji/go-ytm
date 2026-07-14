@@ -57,6 +57,7 @@ type Model struct {
 	artistPage   *ytmapi.ArtistPage
 	albumPage    *ytmapi.AlbumPage
 	playlistPage *ytmapi.PlaylistPage
+	trackCursor  int // focus index within playlist/album tracklist
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
@@ -178,6 +179,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p", " ":
 			if m.currentTrack != nil {
 				m.isPlaying = !m.isPlaying
+				if m.onTracklistScreen() {
+					m.setMainContent()
+				}
 				return m, togglePause(m.player)
 			}
 		case "s":
@@ -188,6 +192,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.playNext()
 		case "b":
 			return m.playPrev()
+		case "enter":
+			if m.onTracklistScreen() {
+				return m.playFocusedTrack()
+			}
 		case "right":
 			if m.currentTrack != nil {
 				return m, seekCmd(m.player, 5)
@@ -235,11 +243,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "up":
+		case "up", "k":
+			if m.onTracklistScreen() {
+				m = m.moveTrackCursor(-1)
+				return m, nil
+			}
 			if m.activePane == PaneMain {
 				if m.activeCarousel > 0 {
 					m.activeCarousel--
-					
 					leftWidth := 24
 					mainWidth := m.width - leftWidth
 					if mainWidth < 0 {
@@ -251,11 +262,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			// Let it fall through to viewport for scrolling
-		case "down":
+		case "down", "j":
+			if m.onTracklistScreen() {
+				m = m.moveTrackCursor(1)
+				return m, nil
+			}
 			if m.activePane == PaneMain {
 				if m.activeCarousel < len(m.homeCarousels)-1 {
 					m.activeCarousel++
-					
 					leftWidth := 24
 					mainWidth := m.width - leftWidth
 					if mainWidth < 0 {
@@ -279,6 +293,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentTrack = &msg.Track
 		m.isPlaying = true
 		m.statusMsg = "Playing: " + msg.Track.Title
+		if m.onTracklistScreen() {
+			m = m.syncTrackCursorToPlaying()
+			m.ensureTrackCursorInView(10, 3)
+			m.setMainContent()
+		}
 		return m, nil
 	case StreamURLMsg:
 		if msg.Err != nil {
@@ -334,11 +353,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.albumPage = msg.Page
 		m.pageErr = ""
+		m.trackCursor = 0
 		m.stack.Push(Screen{Kind: ScreenAlbum, Title: msg.Page.Title})
 		m.statusMsg = msg.Page.Title
+		m = m.syncTrackCursorToPlaying()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
-		return m, nil
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case PlaylistMsg:
 		m.pageLoading = false
 		if msg.Err != nil {
@@ -349,11 +370,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.playlistPage = msg.Page
 		m.pageErr = ""
+		m.trackCursor = 0
 		m.stack.Push(Screen{Kind: ScreenPlaylist, ID: msg.Page.ID, Title: msg.Page.Title})
 		m.statusMsg = msg.Page.Title
+		m = m.syncTrackCursorToPlaying()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
-		return m, nil
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case WatchMsg:
 		if msg.Err != nil || msg.Watch == nil {
 			return m, nil
@@ -386,9 +409,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.enqueueVisibleImages(mainWidth)
 	case ImageLoadedMsg:
 		if msg.Kitty == nil {
-			msg.Kitty = &KittyImage{Spacer: artPlaceholder()}
+			msg.Kitty = &KittyImage{Spacer: sizedPlaceholder(msg.Width, msg.Height)}
 		}
-		m.imageCache[msg.URL] = msg.Kitty
+		w, h := msg.Width, msg.Height
+		if w <= 0 {
+			w = artWidth
+		}
+		if h <= 0 {
+			h = artHeight
+		}
+		m.imageCache[imageCacheKey(msg.URL, w, h)] = msg.Kitty
 		// Debounce grid rebuild so a burst of finishes doesn't reshape N times.
 		if !m.imageDirty {
 			m.imageDirty = true
@@ -529,6 +559,11 @@ func (m Model) playNext() (Model, tea.Cmd) {
 	m.currentTrack = &t
 	m.isPlaying = true
 	m.statusMsg = "Loading: " + t.Title
+	if m.onTracklistScreen() {
+		m = m.syncTrackCursorToPlaying()
+		m.ensureTrackCursorInView(10, 3)
+		m.setMainContent()
+	}
 	return m, playTrack(m.player, m.extractor, t)
 }
 
@@ -542,34 +577,76 @@ func (m Model) playPrev() (Model, tea.Cmd) {
 	m.currentTrack = &t
 	m.isPlaying = true
 	m.statusMsg = "Loading: " + t.Title
+	if m.onTracklistScreen() {
+		m = m.syncTrackCursorToPlaying()
+		m.ensureTrackCursorInView(10, 3)
+		m.setMainContent()
+	}
 	return m, playTrack(m.player, m.extractor, t)
 }
 
-// enqueueVisibleImages fetches thumbs only for currently visible cards / top
-// search results, using a fixed-size placeholder so layout stays stable.
+// enqueueVisibleImages fetches thumbs for the active view (home cards, search,
+// playlist/album cover + track thumbs), keyed by size so layout stays stable.
 func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 	const maxSearchThumbs = 8
+	const maxTrackThumbs = 40
 
 	var cmds []tea.Cmd
 	seen := make(map[string]struct{})
 
-	queue := func(url string) {
+	queue := func(url string, width, height int) {
 		if url == "" {
 			return
 		}
-		if _, dup := seen[url]; dup {
+		key := imageCacheKey(url, width, height)
+		if _, dup := seen[key]; dup {
 			return
 		}
-		seen[url] = struct{}{}
-		if _, ok := m.imageCache[url]; ok {
+		seen[key] = struct{}{}
+		if _, ok := m.imageCache[key]; ok {
 			return
 		}
-		ph := KittyImage{Spacer: artPlaceholder()}
-		m.imageCache[url] = &ph
-		cmds = append(cmds, fetchImage(url))
+		ph := KittyImage{Spacer: sizedPlaceholder(width, height)}
+		m.imageCache[key] = &ph
+		cmds = append(cmds, fetchImageSized(url, width, height))
 	}
 
-	if len(m.searchResults) > 0 {
+	if sc, ok := m.stack.Current(); ok {
+		switch sc.Kind {
+		case ScreenPlaylist:
+			if m.playlistPage != nil {
+				queue(firstThumbURL(m.playlistPage.Thumbnails), coverWidth, coverHeight)
+				n := 0
+				for _, tr := range playableTracks(m.playlistPage.Tracks) {
+					if n >= maxTrackThumbs {
+						break
+					}
+					if u := tr.ThumbURL(); u != "" {
+						queue(u, thumbWidth, thumbHeight)
+						n++
+					}
+				}
+			}
+		case ScreenAlbum:
+			if m.albumPage != nil {
+				queue(firstThumbURL(m.albumPage.Thumbnails), coverWidth, coverHeight)
+				n := 0
+				for _, tr := range playableTracks(m.albumPage.Tracks) {
+					if n >= maxTrackThumbs {
+						break
+					}
+					if u := tr.ThumbURL(); u != "" {
+						queue(u, thumbWidth, thumbHeight)
+						n++
+					}
+				}
+			}
+		case ScreenArtist:
+			if m.artistPage != nil {
+				queue(firstThumbURL(m.artistPage.Thumbnails), coverWidth, coverHeight)
+			}
+		}
+	} else if len(m.searchResults) > 0 {
 		n := 0
 		for _, res := range m.searchResults {
 			if n >= maxSearchThumbs {
@@ -578,9 +655,8 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			if len(res.Thumbnails) == 0 {
 				continue
 			}
-			// Prefer top-result art; other rows don't show thumbs today.
 			if res.Category == "Top result" || n == 0 {
-				queue(res.Thumbnails[0].URL)
+				queue(res.Thumbnails[0].URL, artWidth, artHeight)
 				n++
 			}
 		}
@@ -591,7 +667,7 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 		if maxVisible < 1 {
 			maxVisible = 1
 		}
-		maxVisible++ // match generateMainContent overflow allowance
+		maxVisible++
 
 		for _, carousel := range m.homeCarousels {
 			offset := m.carouselOffsets[carousel.Title]
@@ -607,7 +683,7 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			}
 			for _, card := range carousel.Contents[offset:end] {
 				if len(card.Thumbnails) > 0 {
-					queue(card.Thumbnails[0].URL)
+					queue(card.Thumbnails[0].URL, artWidth, artHeight)
 				}
 			}
 		}

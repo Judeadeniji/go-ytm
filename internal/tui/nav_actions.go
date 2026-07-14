@@ -120,6 +120,11 @@ func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, w
 	m.currentTrack = &t
 	m.isPlaying = true
 	m.statusMsg = "Loading: " + title
+	if m.onTracklistScreen() {
+		m = m.syncTrackCursorToPlaying()
+		m.ensureTrackCursorInView(10, 3)
+		m.setMainContent()
+	}
 
 	cmds := []tea.Cmd{playTrack(m.player, m.extractor, t)}
 	if seedWatch {

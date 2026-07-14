@@ -39,36 +39,52 @@ func (k *KittyImage) WriteToTTY() error {
 	return err
 }
 
-// Art cell size used everywhere (cards, placeholders, cache). Keep these
-// fixed — variable image cell sizes cause the whole grid to jump.
+// Art cell sizes. Card art stays large; track rows use compact thumbs.
 const (
 	artWidth  = 24
 	artHeight = 10
+
+	coverWidth  = 18
+	coverHeight = 8
+
+	thumbWidth  = 4
+	thumbHeight = 2
 )
+
+func imageCacheKey(url string, width, height int) string {
+	return fmt.Sprintf("%s@%dx%d", url, width, height)
+}
 
 // artPlaceholder returns a fixed-size grey box used while thumbs load / on error.
 func artPlaceholder() string {
+	return sizedPlaceholder(artWidth, artHeight)
+}
+
+func sizedPlaceholder(width, height int) string {
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color("#333333")).
-		Width(artWidth).
-		Height(artHeight).
+		Width(width).
+		Height(height).
 		Render("")
 }
 
-// fitArt forces art into a fixed Width×Height cell so layout never shifts
-// when a real image replaces a placeholder.
-func fitArt(s string) string {
+// fitArtBox forces art into a fixed Width×Height cell so layout never shifts.
+func fitArtBox(s string, width, height int) string {
 	if s == "" {
-		return artPlaceholder()
+		return sizedPlaceholder(width, height)
 	}
-	// Mosaic often leaves a trailing newline which would otherwise add a blank row.
 	s = strings.TrimRight(s, "\n")
 	return lipgloss.NewStyle().
-		Width(artWidth).
-		Height(artHeight).
-		MaxWidth(artWidth).
-		MaxHeight(artHeight).
+		Width(width).
+		Height(height).
+		MaxWidth(width).
+		MaxHeight(height).
 		Render(s)
+}
+
+// fitArt forces card-sized art into the default art box.
+func fitArt(s string) string {
+	return fitArtBox(s, artWidth, artHeight)
 }
 
 // renderWithTermimg uses go-termimg (Halfblocks) as the primary renderer.
@@ -87,8 +103,8 @@ func renderWithTermimg(img image.Image, width, height int) string {
 	return ansiHalfblocks(img, width, height)
 }
 
-func wrapRendered(rendered string) KittyImage {
-	return KittyImage{Spacer: fitArt(rendered)}
+func wrapRendered(rendered string, width, height int) KittyImage {
+	return KittyImage{Spacer: fitArtBox(rendered, width, height)}
 }
 
 // RenderLocalImage loads a local file and renders it as a terminal image.
@@ -103,7 +119,7 @@ func RenderLocalImage(filepath string, width, height, _ int) KittyImage {
 	if err != nil {
 		return fallbackKitty(width, height)
 	}
-	return wrapRendered(renderWithTermimg(img, width, height))
+	return wrapRendered(renderWithTermimg(img, width, height), width, height)
 }
 
 // RenderRemoteImage downloads a URL and renders it as a terminal image.
@@ -127,7 +143,7 @@ func RenderRemoteImage(url string, width, height, _ int) KittyImage {
 	if err != nil {
 		return fallbackKitty(width, height)
 	}
-	return wrapRendered(renderWithTermimg(img, width, height))
+	return wrapRendered(renderWithTermimg(img, width, height), width, height)
 }
 
 // ansiHalfblocks renders an image.Image using Unicode ▀ half-block characters
@@ -168,7 +184,5 @@ func resizeNearest(src image.Image, w, h int) image.Image {
 }
 
 func fallbackKitty(width, height int) KittyImage {
-	_ = width
-	_ = height
-	return KittyImage{Spacer: artPlaceholder()}
+	return KittyImage{Spacer: sizedPlaceholder(width, height)}
 }
