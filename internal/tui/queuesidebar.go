@@ -86,50 +86,41 @@ func (m Model) generateQueuePanelContent(width int) string {
 		return sb.String()
 	}
 
-	for i, tr := range tracks {
-		playing := i == cur
-		upcoming := cur >= 0 && i > cur
-		past := cur >= 0 && i < cur
-		focused := m.activePane == PaneQueue && m.queueCursor == i
+	// Only upcoming tracks — now-playing is already shown above.
+	start := cur + 1
+	if cur < 0 {
+		start = 0
+	}
+	if start >= len(tracks) {
+		sb.WriteString(lipgloss.NewStyle().
+			Foreground(colorSubtext).
+			Padding(0, 1).
+			Render("Nothing up next"))
+		return sb.String()
+	}
 
-		// Skip past tracks except keep a tight history of 1 previous.
-		if past && i < cur-1 {
-			continue
-		}
+	for n, i := 1, start; i < len(tracks); n, i = n+1, i+1 {
+		tr := tracks[i]
+		focused := m.activePane == PaneQueue && m.queueCursor == i
 
 		ind := "  "
 		titleColor := colorText
 		artistColor := colorSubtext
 		bg := colorBg
-		if playing {
-			ind = "▶ "
-			titleColor = colorAccent
-		}
 		if focused {
 			bg = colorFocusBg
-			if !playing {
-				ind = "› "
-			}
-		} else if past {
-			titleColor = colorSubtext
+			ind = "› "
+			titleColor = colorAccent
 		}
 
-		num := ""
-		if upcoming || playing {
-			if playing {
-				num = ""
-			} else {
-				num = fmt.Sprintf("%d ", i-cur)
-			}
-		}
-
+		num := fmt.Sprintf("%d ", n)
 		lineBudget := inner - lipgloss.Width(ind) - lipgloss.Width(num) - 1
 		if lineBudget < 6 {
 			lineBudget = 6
 		}
 		title := lipgloss.NewStyle().
 			Foreground(titleColor).
-			Bold(playing || focused).
+			Bold(focused).
 			Background(bg).
 			MaxWidth(lineBudget).
 			Render(tr.Title)
