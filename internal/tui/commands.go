@@ -41,10 +41,13 @@ func playTrack(ext *search.Extractor, t Track, gen int) tea.Cmd {
 }
 
 // loadTrack loads a resolved URL into mpv and signals TrackStartedMsg.
-func loadTrack(p *player.Player, t Track, url string, gen int) tea.Cmd {
+func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64) tea.Cmd {
 	return func() tea.Msg {
 		_ = p.Load(url)
 		_ = p.Play()
+		if seekTo > 1 {
+			_ = p.SeekAbsolute(seekTo)
+		}
 		return TrackStartedMsg{Track: t, Gen: gen}
 	}
 }

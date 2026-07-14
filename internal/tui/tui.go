@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
+	"github.com/judeadeniji/go-ytm/internal/session"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 	zone "github.com/lrstanley/bubblezone"
 )
@@ -69,6 +70,11 @@ type Model struct {
 	homeCardCursor int // card index within active home carousel
 	queueCursor   int // focus in queue panel (separate from playing index)
 
+	sessionStore *session.Store
+	sessionDirty bool
+	audioLoaded  bool    // mpv has the current track loaded
+	resumeSeek   float64 // seek here after load (session restore)
+
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
 }
@@ -85,6 +91,8 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(colorText)
 	ti.CharLimit = 156
 	ti.Width = 56 // Leave room for padding
+
+	store, _ := session.Open()
 
 	return Model{
 		activePane:     PaneMain,
@@ -119,11 +127,18 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 		statusMsg:         "Ready",
 		queue:             Queue{current: -1},
 		progress:          newProgressBar(40),
+		sessionStore:      store,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(fetchHome(m.ytmapiClient), tickPlayProgress(), listenTrackEnded(m.player))
+	return tea.Batch(
+		loadSession(m.sessionStore),
+		fetchHome(m.ytmapiClient),
+		tickPlayProgress(),
+		listenTrackEnded(m.player),
+		tickSessionPersist(),
+	)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -166,9 +181,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
-			return m, tea.Quit
+			m.markSessionDirty()
+			return m, tea.Sequence(saveSession(m.sessionStore, m.snapshot()), tea.Quit)
 		case "esc":
 			m = m.popNav()
+			m.markSessionDirty()
 			return m, nil
 		case "tab":
 			m.activePane = m.nextPane()
@@ -192,6 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "\\":
 			m.queuePanelHidden = !m.queuePanelHidden
+			m.markSessionDirty()
 			m.applyLayout()
 			return m, m.enqueueVisibleImages(m.mainWidth())
 		case "/":
@@ -199,29 +217,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchInput.Focus()
 			return m, textinput.Blink
 		case "p":
-			if m.currentTrack != nil {
-				m.isPlaying = !m.isPlaying
-				if m.onTracklistScreen() {
-					m.setMainContent()
-				}
-				return m, togglePause(m.player)
-			}
-			return m, nil
+			return m.togglePlayPause()
 		case " ":
 			if m.currentTrack != nil {
-				m.isPlaying = !m.isPlaying
-				if m.onTracklistScreen() {
-					m.setMainContent()
-				}
-				return m, togglePause(m.player)
+				return m.togglePlayPause()
 			}
-			// No track: treat space as activate when a list is focused.
 			return m.activateFocused()
 		case "s":
 			m.statusMsg = "Stopped playback"
 			m.isPlaying = false
+			m.audioLoaded = false
 			m.playPos = 0
 			m.playDuration = 0
+			m.markSessionDirty()
 			m.setQueuePanelContent()
 			return m, stopPlayback(m.player)
 		case "n":
@@ -294,9 +302,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.currentTrack = &msg.Track
 		m.isPlaying = true
-		m.playPos = 0
+		m.audioLoaded = true
+		if m.resumeSeek > 1 {
+			m.playPos = m.resumeSeek
+		} else {
+			m.playPos = 0
+		}
+		m.resumeSeek = 0
 		m.playDuration = 0
 		m.statusMsg = "Playing: " + msg.Track.Title
+		m.markSessionDirty()
 		if m.onTracklistScreen() {
 			m = m.syncTrackCursorToPlaying()
 			m.ensureTrackCursorInView(10, 1)
@@ -322,7 +337,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.statusMsg = "Starting: " + msg.Track.Title
-		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen)
+		seekTo := m.resumeSeek
+		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen, seekTo)
+	case sessionLoadedMsg:
+		if msg.Err != nil {
+			m.statusMsg = "Session load failed"
+			return m, nil
+		}
+		cmd := m.applySnapshot(msg.Snap)
+		m.applyLayout()
+		m.setQueuePanelContent()
+		if m.leftViewport.Width > 0 {
+			m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+		}
+		return m, cmd
+	case sessionPersistTickMsg:
+		var cmds []tea.Cmd
+		cmds = append(cmds, tickSessionPersist())
+		if m.sessionDirty {
+			m.sessionDirty = false
+			cmds = append(cmds, saveSession(m.sessionStore, m.snapshot()))
+		}
+		return m, tea.Batch(cmds...)
+	case sessionSavedMsg:
+		return m, nil
 	case trackEndedMsg:
 		// Always re-arm the listener; only natural EOF advances the queue.
 		// loadfile/stop emit reason "stop" (or similar) — ignore those.
@@ -349,8 +387,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Duration > 0 {
 				m.playDuration = msg.Duration
 			}
-			// Don't rebuild the queue rail every tick — that causes flicker.
-			// Bottom player bar reads playPos/Duration live from Model.
+			if m.audioLoaded {
+				m.markSessionDirty()
+			}
 		}
 		return m, nil
 	case StreamURLMsg:
@@ -376,6 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pageLoading = false
 		m.pageErr = ""
 		m.statusMsg = fmt.Sprintf("Found %d results", len(msg.Results))
+		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
@@ -394,8 +434,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if id == "" {
 			id = msg.Page.ChannelID
 		}
-		m.stack.Push(Screen{Kind: ScreenArtist, ID: id, Title: msg.Page.Name})
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenArtist, ID: id, Title: msg.Page.Name})
 		m.statusMsg = msg.Page.Name
+		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
@@ -410,9 +451,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.albumPage = msg.Page
 		m.pageErr = ""
 		m.trackCursor = 0
-		m.stack.Push(Screen{Kind: ScreenAlbum, Title: msg.Page.Title})
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenAlbum, ID: msg.BrowseID, Title: msg.Page.Title})
 		m.statusMsg = msg.Page.Title
 		m = m.syncTrackCursorToPlaying()
+		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
@@ -427,9 +469,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playlistPage = msg.Page
 		m.pageErr = ""
 		m.trackCursor = 0
-		m.stack.Push(Screen{Kind: ScreenPlaylist, ID: msg.Page.ID, Title: msg.Page.Title})
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenPlaylist, ID: msg.Page.ID, Title: msg.Page.Title})
 		m.statusMsg = msg.Page.Title
 		m = m.syncTrackCursorToPlaying()
+		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
@@ -463,6 +506,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			seen[tr.VideoID] = struct{}{}
 			m.queue.Add(trackFromAPI(tr))
 		}
+		m.markSessionDirty()
 		m.applyLayout()
 		m.setQueuePanelContent()
 		return m, m.enqueueVisibleImages(m.mainWidth())
@@ -530,12 +574,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if mouseMsg.Type == tea.MouseLeft {
 			if m.zone.Get("player_play").InBounds(mouseMsg) {
-				if m.currentTrack != nil {
-					m.isPlaying = !m.isPlaying
-					m.setQueuePanelContent()
-					return m, togglePause(m.player)
-				}
-				return m, nil
+				return m.togglePlayPause()
 			}
 			if m.zone.Get("player_next").InBounds(mouseMsg) {
 				return m.playNext()
@@ -569,6 +608,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.playlistPage = nil
 					m.pageLoading = false
 					m.pageErr = ""
+					m.markSessionDirty()
 					m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 					m.setMainContent()
 					m.mainViewport.YOffset = 0
@@ -657,6 +697,8 @@ func (m Model) playQueueIndex(i int) (Model, tea.Cmd) {
 func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.currentTrack = &t
 	m.isPlaying = true
+	m.audioLoaded = false
+	m.resumeSeek = 0
 	m.playPos = 0
 	m.playDuration = 0
 	m.playGen++
@@ -670,6 +712,7 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	}
 	m.applyLayout()
 	m.setQueuePanelContent()
+	m.markSessionDirty()
 	// Stop immediately so the previous track doesn't keep playing during extract.
 	return m, tea.Batch(
 		stopPlayback(m.player),

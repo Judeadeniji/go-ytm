@@ -307,3 +307,8 @@ func (p *Player) TogglePause() error {
 func (p *Player) SeekRelative(seconds float64) error {
 	return p.sendCommand("seek", seconds, "relative")
 }
+
+// SeekAbsolute seeks to an absolute position in seconds.
+func (p *Player) SeekAbsolute(seconds float64) error {
+	return p.sendCommand("seek", seconds, "absolute")
+}

@@ -14,8 +14,9 @@ type ArtistMsg struct {
 }
 
 type AlbumMsg struct {
-	Page *ytmapi.AlbumPage
-	Err  error
+	Page     *ytmapi.AlbumPage
+	BrowseID string
+	Err      error
 }
 
 type PlaylistMsg struct {
@@ -38,7 +39,7 @@ func fetchArtist(api *ytmapi.Client, channelID string) tea.Cmd {
 func fetchAlbum(api *ytmapi.Client, browseID string) tea.Cmd {
 	return func() tea.Msg {
 		page, err := api.GetAlbum(browseID)
-		return AlbumMsg{Page: page, Err: err}
+		return AlbumMsg{Page: page, BrowseID: browseID, Err: err}
 	}
 }
 
@@ -49,7 +50,7 @@ func fetchAlbumFromAudioPlaylist(api *ytmapi.Client, audioPlaylistID string) tea
 			return AlbumMsg{Err: err}
 		}
 		page, err := api.GetAlbum(browseID)
-		return AlbumMsg{Page: page, Err: err}
+		return AlbumMsg{Page: page, BrowseID: browseID, Err: err}
 	}
 }
 

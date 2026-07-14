@@ -94,6 +94,7 @@ func (m Model) goHome() Model {
 	m.pageLoading = false
 	m.pageErr = ""
 	m.activeMenu = "Home"
+	m.markSessionDirty()
 	m.setMainContent()
 	m.mainViewport.YOffset = 0
 	return m
@@ -176,6 +177,8 @@ func (m Model) playTracklistFrom(index int) (Model, tea.Cmd) {
 func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model, tea.Cmd) {
 	m.currentTrack = &t
 	m.isPlaying = true
+	m.audioLoaded = false
+	m.resumeSeek = 0
 	m.playPos = 0
 	m.playDuration = 0
 	m.playGen++
@@ -189,6 +192,7 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	}
 	m.applyLayout()
 	m.setQueuePanelContent()
+	m.markSessionDirty()
 
 	cmds := []tea.Cmd{
 		stopPlayback(m.player),
@@ -199,6 +203,32 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 		cmds = append(cmds, fetchWatch(m.ytmapiClient, t.VideoID, watchPlaylistID, false))
 	}
 	return m, tea.Batch(cmds...)
+}
+
+func (m Model) togglePlayPause() (Model, tea.Cmd) {
+	if m.currentTrack == nil {
+		return m, nil
+	}
+	// Restored session: queue remembers the track but mpv hasn't loaded it yet.
+	if !m.audioLoaded {
+		t := *m.currentTrack
+		m.resumeSeek = m.playPos
+		m.isPlaying = true
+		m.playGen++
+		gen := m.playGen
+		m.statusMsg = "Resuming: " + t.Title
+		m.markSessionDirty()
+		if m.onTracklistScreen() {
+			m.setMainContent()
+		}
+		return m, playTrack(m.extractor, t, gen)
+	}
+	m.isPlaying = !m.isPlaying
+	m.markSessionDirty()
+	if m.onTracklistScreen() {
+		m.setMainContent()
+	}
+	return m, togglePause(m.player)
 }
 
 func trackFromAPI(tr ytmapi.TrackItem) Track {

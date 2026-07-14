@@ -51,6 +51,33 @@ func (s *ViewStack) Len() int {
 	return len(s.items)
 }
 
+// Items returns a copy of the stack (bottom → top).
+func (s ViewStack) Items() []Screen {
+	if len(s.items) == 0 {
+		return nil
+	}
+	out := make([]Screen, len(s.items))
+	copy(out, s.items)
+	return out
+}
+
 func (s *ViewStack) IsHome() bool {
 	return len(s.items) == 0
+}
+
+// ReplaceOrPush updates the top screen when it matches kind (+ id), else pushes.
+func (s *ViewStack) ReplaceOrPush(sc Screen) {
+	if cur, ok := s.Current(); ok && cur.Kind == sc.Kind {
+		if sc.ID == "" || cur.ID == "" || cur.ID == sc.ID {
+			s.items[len(s.items)-1] = sc
+			if cur.ID != "" && sc.ID == "" {
+				s.items[len(s.items)-1].ID = cur.ID
+			}
+			if cur.Title != "" && sc.Title == "" {
+				s.items[len(s.items)-1].Title = cur.Title
+			}
+			return
+		}
+	}
+	s.Push(sc)
 }
