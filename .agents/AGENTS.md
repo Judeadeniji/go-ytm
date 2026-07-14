@@ -13,12 +13,12 @@ A terminal-based YouTube Music client written in Go. Target feature set: streami
 The system is split into two processes on purpose:
 
 1. **Go core (this repo, majority of the code)** — TUI, playback control, search/extraction, local library, caching, lyrics.
-2. **Python sidecar (`sidecar/`, small, isolated)** — wraps `ytmusicapi` to handle account login, library sync, and personalized quick picks, exposed as a tiny localhost JSON API.
+2. **Python ytm-api (`ytm-api/`, small, isolated)** — wraps `ytmusicapi` to handle account login, library sync, and personalized quick picks, exposed as a tiny localhost JSON API.
 
 **Why the split exists — do not "simplify" it away:**
-YouTube Music has no public API. Account login, library sync, and quick picks only work by replaying browser auth headers against Google's internal InnerTube endpoints. The Python library `ytmusicapi` (sigma67) is the mature, community-hardened implementation of this. The Go equivalent is a small, thinly-maintained port. Reimplementing this in Go means owning YouTube's internal API reverse-engineering ourselves — high maintenance cost, no upside. The sidecar isolates that fragility behind an HTTP boundary so it can be patched or replaced without touching the Go core.
+YouTube Music has no public API. Account login, library sync, and quick picks only work by replaying browser auth headers against Google's internal InnerTube endpoints. The Python library `ytmusicapi` (sigma67) is the mature, community-hardened implementation of this. The Go equivalent is a small, thinly-maintained port. Reimplementing this in Go means owning YouTube's internal API reverse-engineering ourselves — high maintenance cost, no upside. The ytm-api isolates that fragility behind an HTTP boundary so it can be patched or replaced without touching the Go core.
 
-If an agent is asked to "port the sidecar to Go for consistency," push back and link this section unless the Go ytmusicapi port has since become genuinely mature — check its commit activity first.
+If an agent is asked to "port the ytm-api to Go for consistency," push back and link this section unless the Go ytmusicapi port has since become genuinely mature — check its commit activity first.
 
 ## Tech stack
 
@@ -29,7 +29,7 @@ If an agent is asked to "port the sidecar to Go for consistency," push back and 
 | Search / extraction | `github.com/kkdai/youtube` | Primary. Fallback: shell out to `yt-dlp` if extraction breaks on a format change |
 | Local DB | `modernc.org/sqlite` | Pure Go, no cgo — keeps cross-compilation simple |
 | Lyrics | LRCLIB REST API | Plain HTTP, no auth |
-| Account/library/quick picks | Python sidecar wrapping `ytmusicapi` | Localhost-only HTTP, never exposed externally |
+| Account/library/quick picks | Python ytm-api wrapping `ytmusicapi` | Localhost-only HTTP, never exposed externally |
 
 ## Repo layout
 
@@ -52,7 +52,7 @@ If an agent is asked to "port the sidecar to Go for consistency," push back and 
 - **kkdai/youtube first, yt-dlp fallback second.** Don't invert this — subprocess calls are slower and add a runtime dependency.
 - **All ytm-api calls go through `internal/ytmapi`.** No direct HTTP calls to the ytm-api scattered through the codebase — one client, one place to add retry/backoff when Google inevitably changes something.
 - **Bubbletea models stay pure.** Side effects (mpv commands, HTTP calls) happen in `tea.Cmd`s, not inline in `Update`.
-- **Errors from the sidecar are expected, not exceptional.** Auth/library calls will periodically break upstream. Surface these as a visible but non-fatal TUI state ("library sync unavailable"), never a crash.
+- **Errors from the ytm-api are expected, not exceptional.** Auth/library calls will periodically break upstream. Surface these as a visible but non-fatal TUI state ("library sync unavailable"), never a crash.
 - **Use `make` for all tooling tasks.** Do not run raw `go build`, `go test`, `go fmt`, or `go mod` commands manually. Always use the provided `Makefile` targets (`make build`, `make test`, `make lint`, `make tidy`, `make run`) to ensure required environment variables like `CGO_ENABLED=0` and proper build flags are applied.
 
 ## Build order (for new work / new agents picking this up)
@@ -64,15 +64,26 @@ If an agent is asked to "port the sidecar to Go for consistency," push back and 
 5. Lyrics via LRCLIB
 6. Python ytm-api: login, library sync, quick picks
 
-Later steps depend on earlier ones being stable. Don't start the sidecar work before steps 1–3 are solid — it's the highest-risk, most-likely-to-break piece and easiest to build/debug last.
+Later steps depend on earlier ones being stable. Don't start the ytm-api work before steps 1–3 are solid — it's the highest-risk, most-likely-to-break piece and easiest to build/debug last.
 
 ## Known fragility (don't be surprised by this)
 
-- Sidecar auth headers expire/rotate; expect periodic re-auth flow breakage.
+- ytm-api auth headers expire/rotate; expect periodic re-auth flow breakage.
 - `kkdai/youtube` extraction can break when YouTube changes player signatures — keep the yt-dlp fallback path actually tested, not just present.
 - Legal/ToS note: this uses unofficial extraction and auth-replay against YouTube Music, which violates YouTube's ToS. Personal-use tool, not a distributable product.
 
 ## Testing
 
 - `internal/player`, `internal/library`, `internal/lyrics` should have unit tests with mpv/HTTP mocked.
-- `internal/search` and `sidecar/` need integration tests but expect them to be the flakiest in CI (they hit real or near-real external behavior).
+- `internal/search` and `ytm-api/` need integration tests but expect them to be the flakiest in CI (they hit real or near-real external behavior).
+
+## TUI Layout Convention
+
+The TUI uses `charmbracelet/bubbletea` and `lipgloss` to mimic a modern, 3-column desktop GUI music player (inspired by `.build_assets/image.png`). All new views must adhere to this unified grid:
+*   **Top Bar:** Global navigation tabs (Home, Playlists, Albums, Artists) and Search.
+*   **Left Sidebar:** Fixed width. Shows library navigation and recent playlists.
+*   **Center Content:** Fluid width. Displays the active view (e.g., tracklist, search results).
+*   **Right Sidebar:** Fixed width. Shows contextual info (e.g., Top Artists, lyrics).
+*   **Bottom Bar:** Persistent mini-player with playback progress, current track, and controls.
+
+Do not build simple top-to-bottom CLI lists. Use `lipgloss.JoinHorizontal` and `lipgloss.JoinVertical` to maintain this strict grid.
