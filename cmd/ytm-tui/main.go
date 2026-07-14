@@ -21,7 +21,7 @@ func main() {
 	ext := search.NewExtractor()
 
 	m := tui.NewModel(p, ext)
-	prog := tea.NewProgram(m, tea.WithAltScreen())
+	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
