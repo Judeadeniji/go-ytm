@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -196,7 +195,7 @@ func (m Model) moveTrackCursor(delta int) Model {
 	if m.trackCursor >= len(tracks) {
 		m.trackCursor = len(tracks) - 1
 	}
-	m.ensureTrackCursorInView(10, 3)
+	m.ensureTrackCursorInView(10, 1)
 	m.setMainContent()
 	return m
 }

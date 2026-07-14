@@ -295,7 +295,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Playing: " + msg.Track.Title
 		if m.onTracklistScreen() {
 			m = m.syncTrackCursorToPlaying()
-			m.ensureTrackCursorInView(10, 3)
+			m.ensureTrackCursorInView(10, 1)
 			m.setMainContent()
 		}
 		return m, nil
@@ -561,7 +561,7 @@ func (m Model) playNext() (Model, tea.Cmd) {
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
-		m.ensureTrackCursorInView(10, 3)
+		m.ensureTrackCursorInView(10, 1)
 		m.setMainContent()
 	}
 	return m, playTrack(m.player, m.extractor, t)
@@ -579,7 +579,7 @@ func (m Model) playPrev() (Model, tea.Cmd) {
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
-		m.ensureTrackCursorInView(10, 3)
+		m.ensureTrackCursorInView(10, 1)
 		m.setMainContent()
 	}
 	return m, playTrack(m.player, m.extractor, t)
@@ -589,7 +589,6 @@ func (m Model) playPrev() (Model, tea.Cmd) {
 // playlist/album cover + track thumbs), keyed by size so layout stays stable.
 func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 	const maxSearchThumbs = 8
-	const maxTrackThumbs = 40
 
 	var cmds []tea.Cmd
 	seen := make(map[string]struct{})
@@ -616,30 +615,10 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 		case ScreenPlaylist:
 			if m.playlistPage != nil {
 				queue(firstThumbURL(m.playlistPage.Thumbnails), coverWidth, coverHeight)
-				n := 0
-				for _, tr := range playableTracks(m.playlistPage.Tracks) {
-					if n >= maxTrackThumbs {
-						break
-					}
-					if u := tr.ThumbURL(); u != "" {
-						queue(u, thumbWidth, thumbHeight)
-						n++
-					}
-				}
 			}
 		case ScreenAlbum:
 			if m.albumPage != nil {
 				queue(firstThumbURL(m.albumPage.Thumbnails), coverWidth, coverHeight)
-				n := 0
-				for _, tr := range playableTracks(m.albumPage.Tracks) {
-					if n >= maxTrackThumbs {
-						break
-					}
-					if u := tr.ThumbURL(); u != "" {
-						queue(u, thumbWidth, thumbHeight)
-						n++
-					}
-				}
 			}
 		case ScreenArtist:
 			if m.artistPage != nil {
