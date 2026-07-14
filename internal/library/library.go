@@ -1,9 +1,342 @@
 package library
 
-// Library manages sqlite-backed local playlists, queue, download cache index
-type Library struct {
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/judeadeniji/go-ytm/internal/session"
+
+	_ "modernc.org/sqlite"
+)
+
+const schemaVersion = 1
+
+// DB is the sqlite-backed local store (session, playlists, download cache).
+type DB struct {
+	sql  *sql.DB
+	path string
+	mu   sync.Mutex
 }
 
-func NewLibrary() *Library {
-	return &Library{}
+// DefaultPath returns ~/.local/state/go-ytm/library.db (XDG_STATE_HOME aware).
+func DefaultPath() (string, error) {
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		state = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(state, "go-ytm", "library.db"), nil
+}
+
+// Open opens (or creates) the library database at the default path.
+func Open() (*DB, error) {
+	path, err := DefaultPath()
+	if err != nil {
+		return nil, err
+	}
+	return OpenPath(path)
+}
+
+// OpenPath opens the library database at path.
+func OpenPath(path string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	sqlDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetMaxOpenConns(1)
+	db := &DB{sql: sqlDB, path: path}
+	if err := db.migrate(); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	if err := db.importLegacyJSONSession(); err != nil {
+		// Non-fatal: keep going with empty/sqlite state.
+		fmt.Fprintf(os.Stderr, "library: legacy session import: %v\n", err)
+	}
+	return db, nil
+}
+
+// Path returns the database file path.
+func (db *DB) Path() string {
+	if db == nil {
+		return ""
+	}
+	return db.path
+}
+
+// Close closes the database.
+func (db *DB) Close() error {
+	if db == nil || db.sql == nil {
+		return nil
+	}
+	return db.sql.Close()
+}
+
+func (db *DB) migrate() error {
+	if _, err := db.sql.Exec(`
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY
+);`); err != nil {
+		return err
+	}
+
+	var ver int
+	err := db.sql.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&ver)
+	if err != nil {
+		return err
+	}
+	if ver >= schemaVersion {
+		return nil
+	}
+
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS session (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			active_menu TEXT NOT NULL DEFAULT 'Home',
+			queue_panel_hidden INTEGER NOT NULL DEFAULT 0,
+			search_filter TEXT NOT NULL DEFAULT '',
+			last_search_query TEXT NOT NULL DEFAULT '',
+			active_carousel INTEGER NOT NULL DEFAULT 0,
+			home_card_cursor INTEGER NOT NULL DEFAULT 0,
+			track_cursor INTEGER NOT NULL DEFAULT 0,
+			list_cursor INTEGER NOT NULL DEFAULT 0,
+			queue_cursor INTEGER NOT NULL DEFAULT 0,
+			play_pos REAL NOT NULL DEFAULT 0,
+			queue_index INTEGER NOT NULL DEFAULT -1,
+			show_search INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);`,
+		`CREATE TABLE IF NOT EXISTS queue_track (
+			position INTEGER PRIMARY KEY,
+			video_id TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			artist TEXT NOT NULL DEFAULT '',
+			thumbnail_url TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS nav_stack (
+			position INTEGER PRIMARY KEY,
+			kind TEXT NOT NULL,
+			entity_id TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS local_playlist (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);`,
+		`CREATE TABLE IF NOT EXISTS local_playlist_track (
+			playlist_id INTEGER NOT NULL,
+			position INTEGER NOT NULL,
+			video_id TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			artist TEXT NOT NULL DEFAULT '',
+			thumbnail_url TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (playlist_id, position),
+			FOREIGN KEY (playlist_id) REFERENCES local_playlist(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS download_cache (
+			video_id TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			bytes INTEGER NOT NULL DEFAULT 0,
+			cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);`,
+		`INSERT INTO schema_migrations(version) VALUES (1);`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// importLegacyJSONSession migrates ~/.local/state/go-ytm/session.json once.
+func (db *DB) importLegacyJSONSession() error {
+	jsonPath, err := session.DefaultPath()
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(jsonPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	var n int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM session`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil // already have sqlite session
+	}
+
+	var snap session.Snapshot
+	if err := json.Unmarshal(b, &snap); err != nil {
+		return err
+	}
+	if err := db.SaveSession(snap); err != nil {
+		return err
+	}
+	// Keep the JSON as backup but rename so we don't re-import.
+	_ = os.Rename(jsonPath, jsonPath+".migrated")
+	return nil
+}
+
+// LoadSession returns the persisted UI/playback snapshot, or nil if none.
+func (db *DB) LoadSession() (*session.Snapshot, error) {
+	if db == nil {
+		return nil, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var snap session.Snapshot
+	var hidden, showSearch int
+	err := db.sql.QueryRow(`
+SELECT active_menu, queue_panel_hidden, search_filter, last_search_query,
+       active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
+       play_pos, queue_index, show_search
+FROM session WHERE id = 1`).Scan(
+		&snap.ActiveMenu, &hidden, &snap.SearchFilter, &snap.LastSearchQuery,
+		&snap.ActiveCarousel, &snap.HomeCardCursor, &snap.TrackCursor, &snap.ListCursor, &snap.QueueCursor,
+		&snap.PlayPos, &snap.QueueIndex, &showSearch,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	snap.Version = schemaVersion
+	snap.QueuePanelHidden = hidden != 0
+	snap.ShowSearch = showSearch != 0
+
+	rows, err := db.sql.Query(`
+SELECT video_id, title, artist, thumbnail_url
+FROM queue_track ORDER BY position ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t session.Track
+		if err := rows.Scan(&t.VideoID, &t.Title, &t.Artist, &t.ThumbnailURL); err != nil {
+			return nil, err
+		}
+		snap.Queue = append(snap.Queue, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	navRows, err := db.sql.Query(`
+SELECT kind, entity_id, title FROM nav_stack ORDER BY position ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer navRows.Close()
+	for navRows.Next() {
+		var n session.NavItem
+		if err := navRows.Scan(&n.Kind, &n.ID, &n.Title); err != nil {
+			return nil, err
+		}
+		snap.Nav = append(snap.Nav, n)
+	}
+	return &snap, navRows.Err()
+}
+
+// SaveSession replaces the persisted session, queue, and nav stack.
+func (db *DB) SaveSession(snap session.Snapshot) error {
+	if db == nil {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	hidden, showSearch := 0, 0
+	if snap.QueuePanelHidden {
+		hidden = 1
+	}
+	if snap.ShowSearch {
+		showSearch = 1
+	}
+
+	if _, err := tx.Exec(`
+INSERT INTO session (
+  id, active_menu, queue_panel_hidden, search_filter, last_search_query,
+  active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
+  play_pos, queue_index, show_search, updated_at
+) VALUES (
+  1, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, datetime('now')
+)
+ON CONFLICT(id) DO UPDATE SET
+  active_menu=excluded.active_menu,
+  queue_panel_hidden=excluded.queue_panel_hidden,
+  search_filter=excluded.search_filter,
+  last_search_query=excluded.last_search_query,
+  active_carousel=excluded.active_carousel,
+  home_card_cursor=excluded.home_card_cursor,
+  track_cursor=excluded.track_cursor,
+  list_cursor=excluded.list_cursor,
+  queue_cursor=excluded.queue_cursor,
+  play_pos=excluded.play_pos,
+  queue_index=excluded.queue_index,
+  show_search=excluded.show_search,
+  updated_at=datetime('now')
+`, snap.ActiveMenu, hidden, snap.SearchFilter, snap.LastSearchQuery,
+		snap.ActiveCarousel, snap.HomeCardCursor, snap.TrackCursor, snap.ListCursor, snap.QueueCursor,
+		snap.PlayPos, snap.QueueIndex, showSearch); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM queue_track`); err != nil {
+		return err
+	}
+	for i, t := range snap.Queue {
+		if _, err := tx.Exec(`
+INSERT INTO queue_track(position, video_id, title, artist, thumbnail_url)
+VALUES (?, ?, ?, ?, ?)`, i, t.VideoID, t.Title, t.Artist, t.ThumbnailURL); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM nav_stack`); err != nil {
+		return err
+	}
+	for i, n := range snap.Nav {
+		if _, err := tx.Exec(`
+INSERT INTO nav_stack(position, kind, entity_id, title)
+VALUES (?, ?, ?, ?)`, i, n.Kind, n.ID, n.Title); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }

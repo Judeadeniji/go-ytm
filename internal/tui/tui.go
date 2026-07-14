@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/library"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
-	"github.com/judeadeniji/go-ytm/internal/session"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 	zone "github.com/lrstanley/bubblezone"
 )
@@ -70,7 +70,7 @@ type Model struct {
 	homeCardCursor int // card index within active home carousel
 	queueCursor   int // focus in queue panel (separate from playing index)
 
-	sessionStore *session.Store
+	sessionStore *library.DB
 	sessionDirty bool
 	audioLoaded  bool    // mpv has the current track loaded
 	resumeSeek   float64 // seek here after load (session restore)
@@ -92,7 +92,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 	ti.CharLimit = 156
 	ti.Width = 56 // Leave room for padding
 
-	store, _ := session.Open()
+	store, _ := library.Open()
 
 	return Model{
 		activePane:     PaneMain,

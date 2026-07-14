@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/judeadeniji/go-ytm/internal/library"
 	"github.com/judeadeniji/go-ytm/internal/session"
 )
 
@@ -18,22 +19,22 @@ type sessionSavedMsg struct {
 
 type sessionPersistTickMsg time.Time
 
-func loadSession(store *session.Store) tea.Cmd {
+func loadSession(db *library.DB) tea.Cmd {
 	return func() tea.Msg {
-		if store == nil {
+		if db == nil {
 			return sessionLoadedMsg{}
 		}
-		snap, err := store.Load()
+		snap, err := db.LoadSession()
 		return sessionLoadedMsg{Snap: snap, Err: err}
 	}
 }
 
-func saveSession(store *session.Store, snap session.Snapshot) tea.Cmd {
+func saveSession(db *library.DB, snap session.Snapshot) tea.Cmd {
 	return func() tea.Msg {
-		if store == nil {
+		if db == nil {
 			return sessionSavedMsg{}
 		}
-		return sessionSavedMsg{Err: store.Save(snap)}
+		return sessionSavedMsg{Err: db.SaveSession(snap)}
 	}
 }
 
