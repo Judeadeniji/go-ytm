@@ -71,10 +71,7 @@ type SearchResultsMsg struct {
 }
 
 func doSearch(apiClient *ytmapi.Client, query string) tea.Cmd {
-	return func() tea.Msg {
-		results, err := apiClient.Search(query)
-		return SearchResultsMsg{Results: results, Err: err}
-	}
+	return doSearchFiltered(apiClient, query, "")
 }
 
 type SearchSuggestionsMsg struct {

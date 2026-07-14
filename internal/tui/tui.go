@@ -36,8 +36,10 @@ type Model struct {
 	searchSuggestions []SearchSuggestion
 	zone              *zone.Manager
 
-	searchResults []ytmapi.SearchResult
-	ytmapiClient  *ytmapi.Client
+	searchResults    []ytmapi.SearchResult
+	searchFilter     string // api filter: "", songs, albums, artists, playlists
+	lastSearchQuery  string
+	ytmapiClient     *ytmapi.Client
 
 	player    *player.Player
 	extractor *search.Extractor
@@ -47,6 +49,14 @@ type Model struct {
 	queue        Queue
 	currentTrack *Track
 	isPlaying    bool
+
+	// Navigation / detail pages
+	stack        ViewStack
+	pageLoading  bool
+	pageErr      string
+	artistPage   *ytmapi.ArtistPage
+	albumPage    *ytmapi.AlbumPage
+	playlistPage *ytmapi.PlaylistPage
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
@@ -79,7 +89,8 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 			{"This ain't Odumodu Blvck", "Oluwaferanmi A.J"},
 			{"Violin Classics", "Oluwaferanmi A.J"},
 		},
-		filters:           []string{"All", "Music", "Podcasts"},
+		filters:           []string{"All", "Songs", "Albums", "Artists", "Playlists"},
+		searchFilter:      "",
 		homeCarousels:     nil,
 		searchSuggestions: []SearchSuggestion{},
 		carouselOffsets:   make(map[string]int),
@@ -121,7 +132,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.mainViewport.Width = mainWidth - 2 // Account for padding
 		m.mainViewport.Height = m.height - 4 - playerBarHeight // header (4) + bottom bar
-		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+		m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 
 	case tea.KeyMsg:
 		// If the search bar is focused, hijack keyboard events
@@ -129,9 +140,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "enter":
 				query := m.searchInput.Value()
+				m.lastSearchQuery = query
 				m.statusMsg = "Searching for: " + query
 				m.searchInput.Blur()
-				return m, doSearch(m.ytmapiClient, query)
+				return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter)
 			case "esc":
 				m.searchInput.Blur()
 				return m, nil
@@ -151,16 +163,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "esc":
-			if len(m.searchResults) > 0 {
-				m.searchResults = nil
-				leftWidth := 24
-				mainWidth := m.width - leftWidth
-				if mainWidth < 0 {
-					mainWidth = 0
-				}
-				m.mainViewport.SetContent(m.generateGridContent(mainWidth))
-				return m, nil
-			}
+			m = m.popNav()
+			return m, nil
 		case "tab":
 			if m.activePane == PaneSidebar {
 				m.activePane = PaneMain
@@ -202,7 +206,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					mainWidth = 0
 				}
 				oldOffset := m.mainViewport.YOffset
-				m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+				m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 				m.mainViewport.YOffset = oldOffset
 				return m, m.enqueueVisibleImages(mainWidth)
 			}
@@ -225,7 +229,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					mainWidth = 0
 				}
 				oldOffset := m.mainViewport.YOffset
-				m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+				m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 				m.mainViewport.YOffset = oldOffset
 				return m, m.enqueueVisibleImages(mainWidth)
 			}
@@ -242,7 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						mainWidth = 0
 					}
 					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+					m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 					m.mainViewport.YOffset = oldOffset
 				}
 			}
@@ -258,7 +262,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						mainWidth = 0
 					}
 					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+					m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 					m.mainViewport.YOffset = oldOffset
 				}
 			}
@@ -287,20 +291,84 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SearchResultsMsg:
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Search error: %v", msg.Err)
+			m.pageLoading = false
 			return m, nil
 		}
 		m.searchResults = msg.Results
+		m.stack.Clear()
+		m.artistPage = nil
+		m.albumPage = nil
+		m.playlistPage = nil
+		m.pageLoading = false
+		m.pageErr = ""
 		m.statusMsg = fmt.Sprintf("Found %d results", len(msg.Results))
-
-		leftWidth := 24
-		mainWidth := m.width - leftWidth
-		if mainWidth < 0 {
-			mainWidth = 0
+		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+		m.mainViewport.YOffset = 0
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case ArtistMsg:
+		m.pageLoading = false
+		if msg.Err != nil {
+			m.pageErr = fmtErr(msg.Err)
+			m.statusMsg = "Artist unavailable"
+			m.setMainContent()
+			return m, nil
 		}
-		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
-		m.mainViewport.YOffset = 0 // reset scroll
-
-		return m, m.enqueueVisibleImages(mainWidth)
+		m.artistPage = msg.Page
+		m.pageErr = ""
+		id := msg.RequestID
+		if id == "" {
+			id = msg.Page.ChannelID
+		}
+		m.stack.Push(Screen{Kind: ScreenArtist, ID: id, Title: msg.Page.Name})
+		m.statusMsg = msg.Page.Name
+		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+		m.mainViewport.YOffset = 0
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case AlbumMsg:
+		m.pageLoading = false
+		if msg.Err != nil {
+			m.pageErr = fmtErr(msg.Err)
+			m.statusMsg = "Album unavailable"
+			m.setMainContent()
+			return m, nil
+		}
+		m.albumPage = msg.Page
+		m.pageErr = ""
+		m.stack.Push(Screen{Kind: ScreenAlbum, Title: msg.Page.Title})
+		m.statusMsg = msg.Page.Title
+		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+		m.mainViewport.YOffset = 0
+		return m, nil
+	case PlaylistMsg:
+		m.pageLoading = false
+		if msg.Err != nil {
+			m.pageErr = fmtErr(msg.Err)
+			m.statusMsg = "Playlist unavailable"
+			m.setMainContent()
+			return m, nil
+		}
+		m.playlistPage = msg.Page
+		m.pageErr = ""
+		m.stack.Push(Screen{Kind: ScreenPlaylist, ID: msg.Page.ID, Title: msg.Page.Title})
+		m.statusMsg = msg.Page.Title
+		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+		m.mainViewport.YOffset = 0
+		return m, nil
+	case WatchMsg:
+		if msg.Err != nil || msg.Watch == nil {
+			return m, nil
+		}
+		// Seed upcoming tracks after the one we just started (skip first if same).
+		for i, tr := range msg.Watch.Tracks {
+			if tr.VideoID == "" {
+				continue
+			}
+			if m.currentTrack != nil && tr.VideoID == m.currentTrack.VideoID && i == 0 {
+				continue
+			}
+			m.queue.Add(trackFromAPI(tr))
+		}
+		return m, nil
 	case HomeMsg:
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Home error: %v", msg.Err)
@@ -313,7 +381,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if mainWidth < 0 {
 			mainWidth = 0
 		}
-		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+		m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 
 		return m, m.enqueueVisibleImages(mainWidth)
 	case ImageLoadedMsg:
@@ -335,7 +403,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			mainWidth = 0
 		}
 		oldOffset := m.mainViewport.YOffset
-		m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+		m.mainViewport.SetContent(m.generateMainContent(mainWidth))
 		m.mainViewport.YOffset = oldOffset
 		// Kick off any newly-visible thumbs after layout settled.
 		return m, m.enqueueVisibleImages(mainWidth)
@@ -361,9 +429,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i, s := range m.searchSuggestions {
 				if m.zone.Get(fmt.Sprintf("suggestion_%d", i)).InBounds(mouseMsg) {
 					m.searchInput.SetValue(s.Text)
+					m.lastSearchQuery = s.Text
 					m.statusMsg = "Searching for: " + s.Text
 					m.searchInput.Blur()
-					return m, doSearch(m.ytmapiClient, s.Text)
+					return m, doSearchFiltered(m.ytmapiClient, s.Text, m.searchFilter)
 				}
 			}
 		}
@@ -383,50 +452,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.playPrev()
 			}
 
-			if !m.searchInput.Focused() && len(m.searchResults) > 0 {
-				for _, res := range m.searchResults {
-					if res.VideoID != "" {
-						if m.zone.Get("search_result_video_"+res.VideoID).InBounds(mouseMsg) {
-							m.statusMsg = "Loading: " + res.Title
-							artist := res.Artist
-							if artist == "" && len(res.Artists) > 0 {
-								artist = res.Artists[0].Name
-							}
-							thumbnailURL := ""
-							if len(res.Thumbnails) > 0 {
-								thumbnailURL = res.Thumbnails[0].URL
-							}
-							t := Track{
-								VideoID:      res.VideoID,
-								Title:        res.Title,
-								Artist:       artist,
-								ThumbnailURL: thumbnailURL,
-							}
-							m.queue.AppendAndSelect(t)
-							m.currentTrack = &t
-							m.isPlaying = true
-							return m, playTrack(m.player, m.extractor, t)
-						}
-					}
-				}
-			}
-
 			// Sidebar menu items
 			for _, item := range m.menuItems {
 				if m.zone.Get("menu_"+item).InBounds(mouseMsg) {
-					m.activeMenu = item
-					m.searchResults = nil // clear search results so we can see the menu
-					
-					leftWidth := 24
-					mainWidth := m.width - leftWidth
-					if mainWidth < 0 {
-						mainWidth = 0
+					if item == "Home" {
+						m = m.goHome()
+						m.leftViewport.SetContent(m.generateSidebarContent(24))
+						return m, m.enqueueVisibleImages(m.mainWidth())
 					}
-					m.leftViewport.SetContent(m.generateSidebarContent(leftWidth))
-					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+					m.activeMenu = item
+					m.stack.Clear()
+					m.searchResults = nil
+					m.artistPage = nil
+					m.albumPage = nil
+					m.playlistPage = nil
+					m.pageLoading = false
+					m.pageErr = ""
+					m.leftViewport.SetContent(m.generateSidebarContent(24))
+					m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 					m.mainViewport.YOffset = 0
 					return m, nil
 				}
+			}
+
+			// Entity / filter / play zones
+			if mm, zcmd, handled := m.handleZoneClick(mouseMsg); handled {
+				return mm, zcmd
 			}
 
 			for i, carousel := range m.homeCarousels {
@@ -437,59 +488,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.carouselOffsets[title] > 0 {
 						m.carouselOffsets[title]--
 					}
-
-					leftWidth := 24
-					mainWidth := m.width - leftWidth
-					if mainWidth < 0 {
-						mainWidth = 0
-					}
 					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+					m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 					m.mainViewport.YOffset = oldOffset
-					return m, m.enqueueVisibleImages(mainWidth)
+					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 
 				if m.zone.Get(title+"_right").InBounds(mouseMsg) {
 					m.activeCarousel = i
 					m.activePane = PaneMain
 					maxLen := len(carousel.Contents)
-
 					if m.carouselOffsets[title] < maxLen-1 {
 						m.carouselOffsets[title]++
 					}
-
-					leftWidth := 24
-					mainWidth := m.width - leftWidth
-					if mainWidth < 0 {
-						mainWidth = 0
-					}
 					oldOffset := m.mainViewport.YOffset
-					m.mainViewport.SetContent(m.generateGridContent(mainWidth))
+					m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 					m.mainViewport.YOffset = oldOffset
-					return m, m.enqueueVisibleImages(mainWidth)
-				}
-
-				// Carousel card click-to-play
-				for _, card := range carousel.Contents {
-					if card.VideoID != "" {
-						if m.zone.Get("search_result_video_"+card.VideoID).InBounds(mouseMsg) {
-							m.statusMsg = "Loading: " + card.Title
-							thumbnailURL := ""
-							if len(card.Thumbnails) > 0 {
-								thumbnailURL = card.Thumbnails[0].URL
-							}
-							t := Track{
-								VideoID:      card.VideoID,
-								Title:        card.Title,
-								Artist:       card.Description,
-								ThumbnailURL: thumbnailURL,
-							}
-							m.queue.AppendAndSelect(t)
-							m.currentTrack = &t
-							m.isPlaying = true
-							return m, playTrack(m.player, m.extractor, t)
-						}
-					}
+					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 			}
 		}
@@ -576,7 +591,7 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 		if maxVisible < 1 {
 			maxVisible = 1
 		}
-		maxVisible++ // match generateGridContent overflow allowance
+		maxVisible++ // match generateMainContent overflow allowance
 
 		for _, carousel := range m.homeCarousels {
 			offset := m.carouselOffsets[carousel.Title]

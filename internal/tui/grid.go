@@ -7,150 +7,210 @@ import (
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 )
 
-func (m Model) generateGridContent(mainWidth int) string {
-	var mb strings.Builder
-
-	// Filters
-	var filters []string
-	for _, f := range m.filters {
-		filters = append(filters, lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorText).Padding(0, 1).Render(f))
+// generateMainContent routes the center pane by navigation stack / search / menu.
+func (m Model) generateMainContent(mainWidth int) string {
+	if m.pageLoading {
+		return lipgloss.NewStyle().Foreground(colorSubtext).Padding(2).Render("Loading…")
 	}
-	mb.WriteString("  ")
-	mb.WriteString(strings.Join(filters, "   "))
-	mb.WriteString("\n\n\n")
+	if m.pageErr != "" {
+		return lipgloss.NewStyle().Foreground(colorRed).Padding(2).Render("Error: " + m.pageErr)
+	}
+
+	if sc, ok := m.stack.Current(); ok {
+		switch sc.Kind {
+		case ScreenArtist:
+			return m.generateArtistContent(mainWidth)
+		case ScreenAlbum:
+			return m.generateAlbumContent(mainWidth)
+		case ScreenPlaylist:
+			return m.generatePlaylistContent(mainWidth)
+		case ScreenSearch:
+			return m.generateSearchResultsContent(mainWidth)
+		}
+	}
 
 	if len(m.searchResults) > 0 {
 		return m.generateSearchResultsContent(mainWidth)
 	}
 
-	if m.activeMenu == "Library" {
+	switch m.activeMenu {
+	case "Library":
 		return m.generateLibraryContent(mainWidth)
-	} else if m.activeMenu == "Explore" {
+	case "Explore":
 		return m.generateExploreContent(mainWidth)
-	} else if m.activeMenu == "Upgrade" {
+	case "Upgrade":
 		return lipgloss.NewStyle().Padding(4).Foreground(colorText).Render("Upgrade to YouTube Music Premium")
+	default:
+		return m.generateHomeContent(mainWidth)
 	}
+}
 
-	// Helper to render horizontal grid row
-	renderGrid := func(index int, title string, cards []ytmapi.HomeCarouselItem) string {
-		var row strings.Builder
-
-		contentWidth := mainWidth - 2 // mainWidth minus left/right padding
-		cardWidth := 28
-
-		isActive := m.activePane == PaneMain && m.activeCarousel == index
-
-		titleStyle := lipgloss.NewStyle().Bold(true)
-		btnStyle := lipgloss.NewStyle().Background(colorHover).Foreground(colorText).Padding(0, 2)
-
-		if isActive {
-			titleStyle = titleStyle.Foreground(colorText)
-			btnStyle = btnStyle.Background(colorSearchBg).Foreground(colorText) // brighter when active
-		} else {
-			titleStyle = titleStyle.Foreground(colorSubtext)
-			btnStyle = btnStyle.Background(colorBg).Foreground(colorSubtext) // dimmer when inactive
-		}
-
-		titleStr := titleStyle.Render(title)
-
-		leftBtn := m.zone.Mark(title+"_left", btnStyle.Render("<"))
-		rightBtn := m.zone.Mark(title+"_right", btnStyle.Render(">"))
-		arrows := lipgloss.JoinHorizontal(lipgloss.Top, leftBtn, " ", rightBtn)
-
-		// "More" pill is optional, skipped for simplicity
-		rightControls := arrows
-
-		space := contentWidth - lipgloss.Width(titleStr) - lipgloss.Width(rightControls)
-		if space < 1 {
-			space = 1
-		}
-		row.WriteString(titleStr)
-		row.WriteString(strings.Repeat(" ", space))
-		row.WriteString(rightControls)
-		row.WriteString("\n\n")
-
-		var blocks []string
-
-		// Apply carousel scrolling offset
-		offset := m.carouselOffsets[title]
-		if offset < 0 {
-			offset = 0
-		}
-		if offset > len(cards) {
-			offset = len(cards)
-		}
-		visibleCards := cards[offset:]
-		maxVisible := (contentWidth / cardWidth) + 1
-		if len(visibleCards) > maxVisible {
-			visibleCards = visibleCards[:maxVisible]
-		}
-
-		for _, card := range visibleCards {
-			t := card.Title
-			if len(t) > 20 {
-				t = t[:17] + "..."
-			}
-			s := card.Description
-			if s == "" {
-				if card.VideoID != "" {
-					s = "Song/Video"
-				} else if card.PlaylistID != "" {
-					s = "Playlist"
-				} else if card.BrowseID != "" {
-					s = "Album/Artist"
-				}
-			}
-			if len(s) > 20 {
-				s = s[:17] + "..."
-			}
-
-			art := artPlaceholder()
-			if len(card.Thumbnails) > 0 {
-				if kitty, ok := m.imageCache[card.Thumbnails[0].URL]; ok && kitty != nil && kitty.Spacer != "" {
-					art = kitty.Spacer
-				}
-			}
-
-			cardTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(t)
-			cardSubStyle := lipgloss.NewStyle().Foreground(colorSubtext).Render(s)
-
-			content := lipgloss.JoinVertical(lipgloss.Left, art, "", cardTitleStyle, cardSubStyle)
-
-			// Make it clickable if it has a VideoID
-			if card.VideoID != "" {
-				content = m.zone.Mark("search_result_video_"+card.VideoID, content)
-			}
-
-			block := lipgloss.NewStyle().
-				Padding(0, 2).
-				Width(cardWidth).
-				Render(content)
-
-			blocks = append(blocks, block)
-		}
-
-		row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
-		return row.String() + "\n\n\n"
-	}
+func (m Model) generateHomeContent(mainWidth int) string {
+	var mb strings.Builder
 
 	if len(m.homeCarousels) == 0 {
-		mb.WriteString("Loading Home...")
-	} else {
-		for i, carousel := range m.homeCarousels {
-			mb.WriteString(renderGrid(i, carousel.Title, carousel.Contents))
-		}
+		mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Loading Home…"))
+		return mb.String()
 	}
 
+	for i, carousel := range m.homeCarousels {
+		mb.WriteString(m.renderCarouselRow(i, carousel.Title, carousel.Contents, mainWidth))
+	}
 	return mb.String()
+}
+
+func (m Model) renderCarouselRow(index int, title string, cards []ytmapi.HomeCarouselItem, mainWidth int) string {
+	var row strings.Builder
+
+	contentWidth := mainWidth - 2
+	cardWidth := 28
+
+	isActive := m.activePane == PaneMain && m.activeCarousel == index
+
+	titleStyle := lipgloss.NewStyle().Bold(true)
+	btnStyle := lipgloss.NewStyle().Background(colorHover).Foreground(colorText).Padding(0, 2)
+
+	if isActive {
+		titleStyle = titleStyle.Foreground(colorText)
+		btnStyle = btnStyle.Background(colorSearchBg).Foreground(colorText)
+	} else {
+		titleStyle = titleStyle.Foreground(colorSubtext)
+		btnStyle = btnStyle.Background(colorBg).Foreground(colorSubtext)
+	}
+
+	titleStr := titleStyle.Render(title)
+	leftBtn := m.zone.Mark(title+"_left", btnStyle.Render("<"))
+	rightBtn := m.zone.Mark(title+"_right", btnStyle.Render(">"))
+	arrows := lipgloss.JoinHorizontal(lipgloss.Top, leftBtn, " ", rightBtn)
+
+	space := contentWidth - lipgloss.Width(titleStr) - lipgloss.Width(arrows)
+	if space < 1 {
+		space = 1
+	}
+	row.WriteString(titleStr)
+	row.WriteString(strings.Repeat(" ", space))
+	row.WriteString(arrows)
+	row.WriteString("\n\n")
+
+	offset := m.carouselOffsets[title]
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(cards) {
+		offset = len(cards)
+	}
+	visibleCards := cards[offset:]
+	maxVisible := (contentWidth / cardWidth) + 1
+	if len(visibleCards) > maxVisible {
+		visibleCards = visibleCards[:maxVisible]
+	}
+
+	var blocks []string
+	for _, card := range visibleCards {
+		t := card.Title
+		if len(t) > 20 {
+			t = t[:17] + "..."
+		}
+		s := homeCardSubtitle(card)
+		if len(s) > 22 {
+			s = s[:19] + "..."
+		}
+
+		art := artPlaceholder()
+		if len(card.Thumbnails) > 0 {
+			if kitty, ok := m.imageCache[card.Thumbnails[0].URL]; ok && kitty != nil && kitty.Spacer != "" {
+				art = kitty.Spacer
+			}
+		}
+
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			art, "",
+			lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(t),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render(s),
+		)
+
+		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
+			content = m.zone.Mark(zid, content)
+		}
+
+		blocks = append(blocks, lipgloss.NewStyle().Padding(0, 2).Width(cardWidth).Render(content))
+	}
+
+	row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
+	return row.String() + "\n\n\n"
+}
+
+func homeCardSubtitle(card ytmapi.HomeCarouselItem) string {
+	if card.Description != "" {
+		return card.Description
+	}
+	if len(card.Artists) > 0 {
+		sub := card.Artists[0].Name
+		if card.Year != "" {
+			sub += " · " + card.Year
+		}
+		return sub
+	}
+	if card.Year != "" {
+		return card.Year
+	}
+	if card.Views != "" {
+		return card.Views
+	}
+	if card.Subscribers != "" {
+		return card.Subscribers + " subs"
+	}
+	if card.VideoID != "" {
+		return "Song"
+	}
+	if card.PlaylistID != "" {
+		return "Playlist"
+	}
+	if strings.HasPrefix(card.BrowseID, "UC") {
+		return "Artist"
+	}
+	if strings.HasPrefix(card.BrowseID, "MPRE") {
+		return "Album"
+	}
+	return ""
+}
+
+// entityZoneID picks a clickable zone for a home/search entity.
+func entityZoneID(videoID, browseID, playlistID string) string {
+	if videoID != "" {
+		return "play_video_" + videoID
+	}
+	if strings.HasPrefix(browseID, "UC") {
+		return "open_artist_" + browseID
+	}
+	if strings.HasPrefix(browseID, "MPREb_") || strings.HasPrefix(browseID, "MPRE") {
+		return "open_album_" + browseID
+	}
+	if strings.HasPrefix(browseID, "OLAK5uy_") {
+		return "open_olak_" + browseID
+	}
+	if playlistID != "" {
+		if strings.HasPrefix(playlistID, "OLAK5uy_") {
+			return "open_olak_" + playlistID
+		}
+		return "open_playlist_" + playlistID
+	}
+	if strings.HasPrefix(browseID, "VL") {
+		return "open_playlist_" + browseID
+	}
+	if browseID != "" {
+		return "open_browse_" + browseID
+	}
+	return ""
 }
 
 func (m Model) generateLibraryContent(mainWidth int) string {
 	var mb strings.Builder
-
 	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Your Library")
 	mb.WriteString(header)
 	mb.WriteString("\n\n")
-
+	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Sign in coming later — library sync needs YouTube Music auth."))
+	mb.WriteString("\n\n")
 	for _, pl := range m.playlists {
 		title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(pl[0])
 		sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(pl[1])
@@ -159,61 +219,78 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 			art = m.cachedArt.Spacer
 		}
 		row := lipgloss.JoinHorizontal(lipgloss.Top, art, "   ", lipgloss.JoinVertical(lipgloss.Left, title, "\n"+sub))
-
-		// Optional bubblezone if we want to make it playable
-
 		mb.WriteString(row)
 		mb.WriteString("\n\n")
 	}
-
+	_ = mainWidth
 	return mb.String()
 }
 
 func (m Model) generateExploreContent(mainWidth int) string {
 	var mb strings.Builder
-
 	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Explore")
 	mb.WriteString(header)
 	mb.WriteString("\n\n")
-
-	categories := []string{"New releases", "Charts", "Moods & genres"}
-
-	for _, cat := range categories {
-		pill := lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorText).Padding(1, 4).Render(cat)
-		mb.WriteString(pill)
-		mb.WriteString("   ")
-	}
-	mb.WriteString("\n\n")
-
+	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Moods, charts, and explore hubs land in a later pass."))
+	_ = mainWidth
 	return mb.String()
 }
 
 func (m Model) generateSearchResultsContent(mainWidth int) string {
 	var mb strings.Builder
 
-	// Group by category, preserving order
+	// Filter chips
+	chipFilters := []struct {
+		label string
+		value string
+	}{
+		{"All", ""},
+		{"Songs", "songs"},
+		{"Albums", "albums"},
+		{"Artists", "artists"},
+		{"Playlists", "playlists"},
+	}
+	var chips []string
+	for _, cf := range chipFilters {
+		style := lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorSubtext).Padding(0, 1)
+		if m.searchFilter == cf.value {
+			style = style.Foreground(colorText).Bold(true)
+		}
+		chips = append(chips, m.zone.Mark("search_filter_"+cf.value, style.Render(cf.label)))
+	}
+	mb.WriteString(strings.Join(chips, "  "))
+	mb.WriteString("\n\n")
+
 	var categories []string
 	grouped := make(map[string][]ytmapi.SearchResult)
-
 	for _, res := range m.searchResults {
-		if len(grouped[res.Category]) == 0 {
-			categories = append(categories, res.Category)
+		cat := res.Category
+		if cat == "" {
+			cat = titleCase(res.ResultType)
 		}
-		grouped[res.Category] = append(grouped[res.Category], res)
+		if len(grouped[cat]) == 0 {
+			categories = append(categories, cat)
+		}
+		grouped[cat] = append(grouped[cat], res)
 	}
 
 	for _, cat := range categories {
 		results := grouped[cat]
+		mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(cat))
+		mb.WriteString("\n\n")
 
-		if cat == "Top result" {
-			mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Top result"))
-			mb.WriteString("\n\n")
+		for _, res := range results {
+			title := res.Title
+			badge := ""
+			if res.ResultType == "album" && res.Type != "" {
+				badge = res.Type
+			} else if res.ResultType != "" {
+				badge = titleCase(res.ResultType)
+			}
 
-			res := results[0]
-			title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(res.Title)
 			var subParts []string
-			if res.ResultType != "" {
-				subParts = append(subParts, strings.ToUpper(res.ResultType[:1])+res.ResultType[1:])
+			if badge != "" {
+				subParts = append(subParts, badge)
 			}
 			if len(res.Artists) > 0 {
 				subParts = append(subParts, res.Artists[0].Name)
@@ -225,90 +302,64 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			if res.Album.Name != "" {
 				subParts = append(subParts, res.Album.Name)
 			}
-			if res.Views != "" {
-				subParts = append(subParts, res.Views)
+			if res.Year != "" {
+				subParts = append(subParts, res.Year)
 			}
 			if res.Duration != "" {
 				subParts = append(subParts, res.Duration)
 			}
-			sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(subParts, " • "))
+			if res.Views != "" {
+				subParts = append(subParts, res.Views)
+			}
+			if res.ItemCount != "" {
+				subParts = append(subParts, res.ItemCount+" tracks")
+			}
+			sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(subParts, " · "))
 
-			art := artPlaceholder()
-			if len(res.Thumbnails) > 0 {
-				if kitty, ok := m.imageCache[res.Thumbnails[0].URL]; ok && kitty != nil && kitty.Spacer != "" {
-					art = kitty.Spacer
-				}
+			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
+			row := lipgloss.JoinVertical(lipgloss.Left, titleStyled, sub)
+
+			zid := searchResultZone(res)
+			if zid != "" {
+				row = m.zone.Mark(zid, row)
 			}
 
-			row := lipgloss.JoinHorizontal(lipgloss.Top,
-				art, "  ",
-				lipgloss.JoinVertical(lipgloss.Left, title, "\n"+sub))
-
-			if res.VideoID != "" {
-				row = m.zone.Mark("search_result_video_"+res.VideoID, row)
-			}
-
-			banner := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorDivider).
-				Padding(1, 2).
-				Width(mainWidth - 4).
-				Render(row)
-
-			mb.WriteString(banner)
-			mb.WriteString("\n\n\n")
-		} else {
-			mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(cat))
+			mb.WriteString(row)
 			mb.WriteString("\n\n")
-
-			for _, res := range results {
-				title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(res.Title)
-				var subParts []string
-				if len(res.Artists) > 0 {
-					subParts = append(subParts, res.Artists[0].Name)
-				} else if res.Artist != "" {
-					subParts = append(subParts, res.Artist)
-				} else if res.Author != "" {
-					subParts = append(subParts, res.Author)
-				}
-
-				if res.ResultType == "song" || res.ResultType == "video" {
-					if res.Album.Name != "" {
-						subParts = append(subParts, res.Album.Name)
-					}
-					if res.Duration != "" {
-						subParts = append(subParts, res.Duration)
-					}
-					if res.Views != "" {
-						subParts = append(subParts, res.Views)
-					}
-				} else if res.ResultType == "album" {
-					if res.Year != "" {
-						subParts = append(subParts, res.Year)
-					}
-				} else if res.ResultType == "playlist" {
-					if res.ItemCount != "" {
-						subParts = append(subParts, res.ItemCount+" tracks")
-					}
-				}
-
-				sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(subParts, " • "))
-
-				row := lipgloss.JoinHorizontal(lipgloss.Top,
-					lipgloss.NewStyle().PaddingTop(1).Foreground(colorSubtext).Render("▪"),
-					"  ",
-					lipgloss.JoinVertical(lipgloss.Left, title, sub))
-
-				if res.VideoID != "" {
-					row = m.zone.Mark("search_result_video_"+res.VideoID, row)
-				}
-
-				mb.WriteString(row)
-				mb.WriteString("\n\n")
-			}
-			mb.WriteString("\n")
 		}
+			mb.WriteString("\n")
 	}
 
+	_ = mainWidth
 	return mb.String()
+}
+
+func searchResultZone(res ytmapi.SearchResult) string {
+	browseID := res.BrowseID
+	if browseID == "" && len(res.Artists) > 0 {
+		browseID = res.Artists[0].ID
+	}
+	switch res.ResultType {
+	case "song", "video", "episode":
+		if res.VideoID != "" {
+			return "play_video_" + res.VideoID
+		}
+	case "artist":
+		if browseID != "" {
+			return "open_artist_" + browseID
+		}
+	case "album":
+		if browseID != "" {
+			return "open_album_" + browseID
+		}
+	case "playlist":
+		id := browseID
+		if id == "" {
+			id = res.PlaylistID
+		}
+		if id != "" {
+			return "open_playlist_" + id
+		}
+	}
+	return entityZoneID(res.VideoID, browseID, res.PlaylistID)
 }

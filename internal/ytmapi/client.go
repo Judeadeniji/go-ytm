@@ -3,12 +3,13 @@ package ytmapi
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
 )
 
-// Client is a thin HTTP client for the Python ytm-api
+// Client is a thin HTTP client for the Python ytm-api.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -18,34 +19,47 @@ func NewClient() *Client {
 	return &Client{
 		baseURL: "http://127.0.0.1:8000",
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 20 * time.Second,
 		},
 	}
 }
 
-// SearchResult represents a generic item from the ytmusicapi search
-type SearchResult struct {
-	Category   string `json:"category"`
-	ResultType string `json:"resultType"`
-	Title      string `json:"title"`
-	VideoID    string `json:"videoId,omitempty"`
-	BrowseID   string `json:"browseId,omitempty"`
-	Artists    []struct {
-		Name string `json:"name"`
-		ID   string `json:"id"`
-	} `json:"artists,omitempty"`
-	Artist     string `json:"artist,omitempty"`
-	Author     string `json:"author,omitempty"`
-	Duration   string `json:"duration,omitempty"`
-	Views      string `json:"views,omitempty"`
-	Year       string `json:"year,omitempty"`
-	ItemCount  string `json:"itemCount,omitempty"`
-	Album      struct {
-		Name string `json:"name"`
-		ID   string `json:"id"`
-	} `json:"album,omitempty"`
-	VideoType  string      `json:"videoType,omitempty"`
-	Thumbnails []Thumbnail `json:"thumbnails,omitempty"`
+func (c *Client) getJSON(path string, out any) error {
+	u := c.baseURL + path
+	resp, err := c.httpClient.Get(u)
+	if err != nil {
+		return fmt.Errorf("ytm-api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("ytm-api read: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody struct {
+			Detail string `json:"detail"`
+			Error  string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &errBody)
+		msg := errBody.Detail
+		if msg == "" {
+			msg = errBody.Error
+		}
+		if msg == "" {
+			msg = string(body)
+		}
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return fmt.Errorf("ytm-api %d: %s", resp.StatusCode, msg)
+	}
+
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("ytm-api decode: %w", err)
+	}
+	return nil
 }
 
 type searchResponse struct {
@@ -53,34 +67,24 @@ type searchResponse struct {
 }
 
 func (c *Client) Search(query string) ([]SearchResult, error) {
-	u := fmt.Sprintf("%s/search?q=%s", c.baseURL, url.QueryEscape(query))
-	resp, err := c.httpClient.Get(u)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call ytm-api: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.SearchFiltered(query, "", 20)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ytm-api returned status %d", resp.StatusCode)
+func (c *Client) SearchFiltered(query, filter string, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
 	}
-
+	q := url.Values{}
+	q.Set("q", query)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if filter != "" && filter != "all" {
+		q.Set("filter", filter)
+	}
 	var data searchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode ytm-api response: %w", err)
+	if err := c.getJSON("/search?"+q.Encode(), &data); err != nil {
+		return nil, err
 	}
-
 	return data.Results, nil
-}
-
-type SuggestionRun struct {
-	Text string `json:"text"`
-	Bold bool   `json:"bold,omitempty"`
-}
-
-type SearchSuggestionItem struct {
-	Text        string          `json:"text"`
-	Runs        []SuggestionRun `json:"runs,omitempty"`
-	FromHistory bool            `json:"fromHistory,omitempty"`
 }
 
 type suggestionsResponse struct {
@@ -91,43 +95,11 @@ func (c *Client) GetSearchSuggestions(query string) ([]SearchSuggestionItem, err
 	if query == "" {
 		return []SearchSuggestionItem{}, nil
 	}
-	u := fmt.Sprintf("%s/suggestions?q=%s", c.baseURL, url.QueryEscape(query))
-	resp, err := c.httpClient.Get(u)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call ytm-api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ytm-api returned status %d", resp.StatusCode)
-	}
-
 	var data suggestionsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode ytm-api response: %w", err)
+	if err := c.getJSON("/suggestions?q="+url.QueryEscape(query), &data); err != nil {
+		return nil, err
 	}
-
 	return data.Suggestions, nil
-}
-
-type Thumbnail struct {
-	URL    string `json:"url"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-}
-
-type HomeCarouselItem struct {
-	Title       string      `json:"title"`
-	VideoID     string      `json:"videoId,omitempty"`
-	PlaylistID  string      `json:"playlistId,omitempty"`
-	BrowseID    string      `json:"browseId,omitempty"`
-	Description string      `json:"description,omitempty"`
-	Thumbnails  []Thumbnail `json:"thumbnails,omitempty"`
-}
-
-type HomeCarousel struct {
-	Title    string             `json:"title"`
-	Contents []HomeCarouselItem `json:"contents"`
 }
 
 type homeResponse struct {
@@ -135,21 +107,132 @@ type homeResponse struct {
 }
 
 func (c *Client) GetHome() ([]HomeCarousel, error) {
-	u := fmt.Sprintf("%s/home?limit=20", c.baseURL)
-	resp, err := c.httpClient.Get(u)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call ytm-api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ytm-api returned status %d", resp.StatusCode)
-	}
-
 	var data homeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode ytm-api response: %w", err)
+	if err := c.getJSON("/home?limit=20", &data); err != nil {
+		return nil, err
 	}
-
 	return data.Carousels, nil
+}
+
+func (c *Client) GetArtist(channelID string) (*ArtistPage, error) {
+	var data ArtistPage
+	if err := c.getJSON("/artist/"+url.PathEscape(channelID), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+type artistAlbumsResponse struct {
+	Albums []ArtistAlbum `json:"albums"`
+}
+
+func (c *Client) GetArtistAlbums(channelID, params string, limit int) ([]ArtistAlbum, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := url.Values{}
+	q.Set("params", params)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	var data artistAlbumsResponse
+	path := "/artist/" + url.PathEscape(channelID) + "/albums?" + q.Encode()
+	if err := c.getJSON(path, &data); err != nil {
+		return nil, err
+	}
+	return data.Albums, nil
+}
+
+func (c *Client) GetAlbum(browseID string) (*AlbumPage, error) {
+	var data AlbumPage
+	if err := c.getJSON("/album/"+url.PathEscape(browseID), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+type albumBrowseIDResponse struct {
+	BrowseID string `json:"browseId"`
+}
+
+func (c *Client) GetAlbumBrowseID(audioPlaylistID string) (string, error) {
+	q := url.Values{}
+	q.Set("audioPlaylistId", audioPlaylistID)
+	var data albumBrowseIDResponse
+	if err := c.getJSON("/album/browse-id?"+q.Encode(), &data); err != nil {
+		return "", err
+	}
+	return data.BrowseID, nil
+}
+
+func (c *Client) GetPlaylist(playlistID string, limit int) (*PlaylistPage, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	path := fmt.Sprintf("/playlist/%s?limit=%d", url.PathEscape(playlistID), limit)
+	var data PlaylistPage
+	if err := c.getJSON(path, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+func (c *Client) GetWatchPlaylist(videoID, playlistID string, radio bool, limit int) (*WatchPlaylist, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	q := url.Values{}
+	if videoID != "" {
+		q.Set("videoId", videoID)
+	}
+	if playlistID != "" {
+		q.Set("playlistId", playlistID)
+	}
+	if radio {
+		q.Set("radio", "true")
+	}
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	var data WatchPlaylist
+	if err := c.getJSON("/watch?"+q.Encode(), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+// ArtistName returns a display string from artists slice or flat artist field.
+func (t TrackItem) ArtistName() string {
+	if len(t.Artists) > 0 {
+		return t.Artists[0].Name
+	}
+	return t.Artist
+}
+
+// DurationLabel prefers duration, then length (watch).
+func (t TrackItem) DurationLabel() string {
+	if t.Duration != "" {
+		return t.Duration
+	}
+	return t.Length
+}
+
+// ThumbURL returns the first available thumbnail URL.
+func (t TrackItem) ThumbURL() string {
+	if len(t.Thumbnails) > 0 {
+		return t.Thumbnails[0].URL
+	}
+	if len(t.Thumbnail) > 0 {
+		return t.Thumbnail[0].URL
+	}
+	return ""
+}
+
+// AuthorName unwraps playlist author string or object.
+func AuthorName(author any) string {
+	switch v := author.(type) {
+	case string:
+		return v
+	case map[string]any:
+		if name, ok := v["name"].(string); ok {
+			return name
+		}
+	}
+	return ""
 }
