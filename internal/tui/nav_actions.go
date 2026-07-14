@@ -136,7 +136,8 @@ func (m Model) popNav() Model {
 	return m
 }
 
-// playVideo starts playback and optionally seeds the queue from /watch.
+// playVideo starts playback for an ad-hoc/search/home click.
+// seedWatch continues with radio/related tracks after this one.
 func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, watchPlaylistID string) (Model, tea.Cmd) {
 	if videoID == "" {
 		return m, nil
@@ -150,14 +151,37 @@ func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, w
 		Artist:       artist,
 		ThumbnailURL: thumb,
 	}
-	m.queue.AppendAndSelect(t)
+	// Fresh context: don't keep a stale queue under the new track.
+	m.queue.SetPlaying(t)
+	return m.beginPlay(t, seedWatch, watchPlaylistID)
+}
+
+// playTracklistFrom plays tracks[index] and queues only tracks after it
+// from the open album/playlist (no wrap-around via /watch).
+func (m Model) playTracklistFrom(index int) (Model, tea.Cmd) {
+	apiTracks := m.tracklistTracks()
+	if index < 0 || index >= len(apiTracks) {
+		return m, nil
+	}
+	queued := make([]Track, 0, len(apiTracks)-index)
+	for _, tr := range apiTracks[index:] {
+		queued = append(queued, trackFromAPI(tr))
+	}
+	m.queue.SetFrom(queued, 0)
+	t := queued[0]
+	return m.beginPlay(t, false, "")
+}
+
+// beginPlay updates UI state and kicks off extraction for t (already selected in queue).
+func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model, tea.Cmd) {
 	m.currentTrack = &t
 	m.isPlaying = true
 	m.playPos = 0
 	m.playDuration = 0
 	m.playGen++
 	gen := m.playGen
-	m.statusMsg = "Loading: " + title
+	m.queueCursor = m.queue.CurrentIndex()
+	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
 		m.ensureTrackCursorInView(10, 1)
@@ -172,7 +196,7 @@ func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, w
 		m.enqueueVisibleImages(m.mainWidth()),
 	}
 	if seedWatch {
-		cmds = append(cmds, fetchWatch(m.ytmapiClient, videoID, watchPlaylistID, false))
+		cmds = append(cmds, fetchWatch(m.ytmapiClient, t.VideoID, watchPlaylistID, false))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -224,18 +248,20 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 			}
 		case ScreenAlbum:
 			if m.albumPage != nil {
-				for _, tr := range m.albumPage.Tracks {
+				tracks := playableTracks(m.albumPage.Tracks)
+				for i, tr := range tracks {
 					if tr.VideoID != "" && m.zone.Get("play_video_"+tr.VideoID).InBounds(mouse) {
-						mm, cmd := m.playVideo(tr.VideoID, tr.Title, tr.ArtistName(), tr.ThumbURL(), true, m.albumPage.AudioPlaylistID)
+						mm, cmd := m.playTracklistFrom(i)
 						return mm, cmd, true
 					}
 				}
 			}
 		case ScreenPlaylist:
 			if m.playlistPage != nil {
-				for _, tr := range m.playlistPage.Tracks {
+				tracks := playableTracks(m.playlistPage.Tracks)
+				for i, tr := range tracks {
 					if tr.VideoID != "" && m.zone.Get("play_video_"+tr.VideoID).InBounds(mouse) {
-						mm, cmd := m.playVideo(tr.VideoID, tr.Title, tr.ArtistName(), tr.ThumbURL(), true, m.playlistPage.ID)
+						mm, cmd := m.playTracklistFrom(i)
 						return mm, cmd, true
 					}
 				}

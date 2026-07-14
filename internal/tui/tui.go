@@ -437,14 +437,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil || msg.Watch == nil {
 			return m, nil
 		}
-		// Seed upcoming tracks after the one we just started (skip first if same).
-		for i, tr := range msg.Watch.Tracks {
+		// Replace upcoming with watch tracks that come *after* the current
+		// video — never wrap to earlier playlist positions.
+		m.queue.TruncateAfterCurrent()
+		start := 0
+		if m.currentTrack != nil {
+			for i, tr := range msg.Watch.Tracks {
+				if tr.VideoID == m.currentTrack.VideoID {
+					start = i + 1
+					break
+				}
+			}
+		}
+		seen := map[string]struct{}{"": {}}
+		if m.currentTrack != nil {
+			seen[m.currentTrack.VideoID] = struct{}{}
+		}
+		for _, tr := range msg.Watch.Tracks[start:] {
 			if tr.VideoID == "" {
 				continue
 			}
-			if m.currentTrack != nil && tr.VideoID == m.currentTrack.VideoID && i == 0 {
+			if _, dup := seen[tr.VideoID]; dup {
 				continue
 			}
+			seen[tr.VideoID] = struct{}{}
 			m.queue.Add(trackFromAPI(tr))
 		}
 		m.applyLayout()

@@ -74,6 +74,36 @@ func (q *Queue) AppendAndSelect(t Track) {
 	q.current = len(q.tracks) - 1
 }
 
+// SetPlaying replaces the queue with a single track as current.
+func (q *Queue) SetPlaying(t Track) {
+	q.tracks = []Track{t}
+	q.current = 0
+}
+
+// SetFrom replaces the queue with tracks[start:] and selects the first of that slice.
+func (q *Queue) SetFrom(tracks []Track, start int) {
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(tracks) {
+		q.Clear()
+		return
+	}
+	q.tracks = append([]Track(nil), tracks[start:]...)
+	q.current = 0
+}
+
+// TruncateAfterCurrent drops every track after the current one.
+func (q *Queue) TruncateAfterCurrent() {
+	if q.current < 0 {
+		q.tracks = nil
+		return
+	}
+	if q.current+1 < len(q.tracks) {
+		q.tracks = q.tracks[:q.current+1]
+	}
+}
+
 // Clear empties the queue and resets the position.
 func (q *Queue) Clear() {
 	q.tracks = nil

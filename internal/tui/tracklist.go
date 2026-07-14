@@ -85,9 +85,9 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 	indStyle := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(2)
 	if playing {
 		if m.isPlaying {
-			indicator = "▶"
-		} else {
 			indicator = "❚❚"
+		} else {
+			indicator = "▶"
 		}
 		indStyle = indStyle.Foreground(colorAccent)
 	} else if focused {
@@ -202,19 +202,5 @@ func (m Model) playFocusedTrack() (Model, tea.Cmd) {
 	if len(tracks) == 0 || m.trackCursor < 0 || m.trackCursor >= len(tracks) {
 		return m, nil
 	}
-	tr := tracks[m.trackCursor]
-	watchID := ""
-	if sc, ok := m.stack.Current(); ok {
-		switch sc.Kind {
-		case ScreenPlaylist:
-			if m.playlistPage != nil {
-				watchID = m.playlistPage.ID
-			}
-		case ScreenAlbum:
-			if m.albumPage != nil {
-				watchID = m.albumPage.AudioPlaylistID
-			}
-		}
-	}
-	return m.playVideo(tr.VideoID, tr.Title, tr.ArtistName(), tr.ThumbURL(), true, watchID)
+	return m.playTracklistFrom(m.trackCursor)
 }
