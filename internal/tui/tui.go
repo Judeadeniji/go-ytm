@@ -123,7 +123,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client)
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(fetchHome(m.ytmapiClient), tickPlayProgress())
+	return tea.Batch(fetchHome(m.ytmapiClient), tickPlayProgress(), listenTrackEnded(m.player))
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -323,6 +323,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusMsg = "Starting: " + msg.Track.Title
 		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen)
+	case trackEndedMsg:
+		// Always re-arm the listener; only natural EOF advances the queue.
+		// loadfile/stop emit reason "stop" (or similar) — ignore those.
+		rearm := listenTrackEnded(m.player)
+		if msg.Reason != "eof" {
+			return m, rearm
+		}
+		mm, cmd := m.playNext()
+		if cmd == nil {
+			// End of queue
+			mm.isPlaying = false
+			mm.statusMsg = "End of queue"
+			return mm, rearm
+		}
+		return mm, tea.Batch(cmd, rearm)
 	case playProgressTickMsg:
 		if m.currentTrack == nil {
 			return m, tickPlayProgress()
@@ -595,6 +610,7 @@ func (m Model) playNext() (Model, tea.Cmd) {
 	t, ok := m.queue.Next()
 	if !ok {
 		m.statusMsg = "End of queue"
+		m.isPlaying = false
 		return m, nil
 	}
 	return m.startQueuedTrack(t)

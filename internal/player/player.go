@@ -23,6 +23,13 @@ type Player struct {
 	pendingMu sync.Mutex
 	pending   map[int]chan ipcResponse
 	nextReqID int
+
+	events chan EndFileEvent
+}
+
+// EndFileEvent is emitted when mpv finishes a file (natural EOF, stop, error, …).
+type EndFileEvent struct {
+	Reason string
 }
 
 // IPCCommand represents a JSON IPC command for mpv
@@ -36,6 +43,7 @@ type ipcResponse struct {
 	Data      json.RawMessage `json:"data"`
 	RequestID int             `json:"request_id"`
 	Event     string          `json:"event"`
+	Reason    string          `json:"reason"`
 }
 
 var execCommand = exec.Command
@@ -60,6 +68,7 @@ func NewPlayer() (*Player, error) {
 		socketPath: socketPath,
 		cmd:        cmd,
 		pending:    make(map[int]chan ipcResponse),
+		events:     make(chan EndFileEvent, 16),
 	}
 
 	if err := p.connect(5 * time.Second); err != nil {
@@ -88,6 +97,7 @@ func (p *Player) connect(timeout time.Duration) error {
 
 func (p *Player) startEventLoop() {
 	go func() {
+		defer close(p.events)
 		scanner := bufio.NewScanner(p.conn)
 		// mpv responses can be large; bump token size.
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -97,9 +107,20 @@ func (p *Player) startEventLoop() {
 			if err := json.Unmarshal(line, &resp); err != nil {
 				continue
 			}
-			if resp.RequestID == 0 && resp.Event != "" {
-				continue // unsolicited event
+
+			if resp.Event != "" {
+				if resp.Event == "end-file" {
+					select {
+					case p.events <- EndFileEvent{Reason: resp.Reason}:
+					default:
+						// Drop if the UI isn't draining — don't stall the IPC loop.
+					}
+				}
+				if resp.RequestID == 0 {
+					continue
+				}
 			}
+
 			p.pendingMu.Lock()
 			ch, ok := p.pending[resp.RequestID]
 			if ok {
@@ -119,6 +140,11 @@ func (p *Player) startEventLoop() {
 			}
 		}
 	}()
+}
+
+// Events returns the channel of end-file notifications from mpv.
+func (p *Player) Events() <-chan EndFileEvent {
+	return p.events
 }
 
 func isClosedConnectionError(err error) bool {

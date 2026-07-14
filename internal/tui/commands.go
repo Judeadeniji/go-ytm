@@ -49,6 +49,25 @@ func loadTrack(p *player.Player, t Track, url string, gen int) tea.Cmd {
 	}
 }
 
+// trackEndedMsg is raised when mpv fires an end-file event.
+type trackEndedMsg struct {
+	Reason string
+}
+
+// listenTrackEnded waits for the next mpv end-file event.
+func listenTrackEnded(p *player.Player) tea.Cmd {
+	return func() tea.Msg {
+		if p == nil {
+			return nil
+		}
+		ev, ok := <-p.Events()
+		if !ok {
+			return nil
+		}
+		return trackEndedMsg{Reason: ev.Reason}
+	}
+}
+
 // togglePause sends a pause-cycle command to mpv.
 func togglePause(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
