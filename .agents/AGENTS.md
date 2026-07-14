@@ -53,6 +53,7 @@ If an agent is asked to "port the sidecar to Go for consistency," push back and 
 - **All ytm-api calls go through `internal/ytmapi`.** No direct HTTP calls to the ytm-api scattered through the codebase — one client, one place to add retry/backoff when Google inevitably changes something.
 - **Bubbletea models stay pure.** Side effects (mpv commands, HTTP calls) happen in `tea.Cmd`s, not inline in `Update`.
 - **Errors from the sidecar are expected, not exceptional.** Auth/library calls will periodically break upstream. Surface these as a visible but non-fatal TUI state ("library sync unavailable"), never a crash.
+- **Use `make` for all tooling tasks.** Do not run raw `go build`, `go test`, `go fmt`, or `go mod` commands manually. Always use the provided `Makefile` targets (`make build`, `make test`, `make lint`, `make tidy`, `make run`) to ensure required environment variables like `CGO_ENABLED=0` and proper build flags are applied.
 
 ## Build order (for new work / new agents picking this up)
 
