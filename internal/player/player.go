@@ -2,14 +2,17 @@ package player
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -19,6 +22,10 @@ type Player struct {
 	cmd        *exec.Cmd
 	conn       net.Conn
 	mu         sync.Mutex
+	stderr     bytes.Buffer
+
+	waitOnce sync.Once
+	waitErr  error
 
 	pendingMu sync.Mutex
 	pending   map[int]chan ipcResponse
@@ -48,21 +55,25 @@ type ipcResponse struct {
 
 var execCommand = exec.Command
 
+const ipcConnectTimeout = 10 * time.Second
+
 // NewPlayer starts an mpv instance with an IPC server and connects to it.
 func NewPlayer() (*Player, error) {
 	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("go-ytm-mpv-%d.sock", time.Now().UnixNano()))
-	os.Remove(socketPath)
+	_ = os.Remove(socketPath)
 
 	cmd := execCommand("mpv",
-		"--idle",
+		"--idle=yes",
 		"--no-video",
 		"--force-window=no",
 		"--audio-display=no",
+		// Avoid contesting the TTY with the Bubble Tea UI (common hang/flake cause).
+		"--no-terminal",
+		"--really-quiet",
+		// User scripts can delay or block IPC socket creation intermittently.
+		"--load-scripts=no",
 		"--input-ipc-server="+socketPath,
 	)
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start mpv: %w", err)
-	}
 
 	p := &Player{
 		socketPath: socketPath,
@@ -70,9 +81,15 @@ func NewPlayer() (*Player, error) {
 		pending:    make(map[int]chan ipcResponse),
 		events:     make(chan EndFileEvent, 16),
 	}
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &p.stderr
 
-	if err := p.connect(5 * time.Second); err != nil {
-		p.Close()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start mpv: %w", err)
+	}
+
+	if err := p.connect(ipcConnectTimeout); err != nil {
+		_ = p.Close()
 		return nil, fmt.Errorf("failed to connect to mpv IPC: %w", err)
 	}
 
@@ -81,24 +98,71 @@ func NewPlayer() (*Player, error) {
 }
 
 func (p *Player) connect(timeout time.Duration) error {
-	start := time.Now()
+	deadline := time.Now().Add(timeout)
 	for {
+		if err := p.processAlive(); err != nil {
+			return err
+		}
 		conn, err := net.Dial("unix", p.socketPath)
 		if err == nil {
 			p.conn = conn
 			return nil
 		}
-		if time.Since(start) > timeout {
+		if time.Now().After(deadline) {
+			_ = p.processAlive() // surface exit if it died at the last moment
+			hint := strings.TrimSpace(p.stderr.String())
+			if hint != "" {
+				if len(hint) > 240 {
+					hint = hint[:240] + "…"
+				}
+				return fmt.Errorf("timeout waiting for socket %s (mpv: %s)", p.socketPath, hint)
+			}
 			return fmt.Errorf("timeout waiting for socket %s", p.socketPath)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
+// processAlive returns an error if the mpv child has already exited.
+func (p *Player) processAlive() error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return fmt.Errorf("mpv process missing")
+	}
+	// Signal 0 checks liveness without affecting the process (Unix).
+	if err := p.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		waitErr := p.reap()
+		hint := strings.TrimSpace(p.stderr.String())
+		if hint != "" {
+			if len(hint) > 240 {
+				hint = hint[:240] + "…"
+			}
+			return fmt.Errorf("mpv exited before IPC ready: %v (%s)", waitErr, hint)
+		}
+		if waitErr != nil {
+			return fmt.Errorf("mpv exited before IPC ready: %w", waitErr)
+		}
+		return fmt.Errorf("mpv exited before IPC ready")
+	}
+	return nil
+}
+
+func (p *Player) reap() error {
+	p.waitOnce.Do(func() {
+		if p.cmd != nil {
+			p.waitErr = p.cmd.Wait()
+		}
+	})
+	return p.waitErr
+}
+
 func (p *Player) startEventLoop() {
+	conn := p.conn
 	go func() {
 		defer close(p.events)
-		scanner := bufio.NewScanner(p.conn)
+		if conn == nil {
+			return
+		}
+		scanner := bufio.NewScanner(conn)
 		// mpv responses can be large; bump token size.
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -161,20 +225,22 @@ func (p *Player) Close() error {
 
 	if p.conn != nil {
 		_ = p.sendCommandUnlocked("quit")
-		p.conn.Close()
+		_ = p.conn.Close()
+		p.conn = nil
 	}
 
 	if p.cmd != nil && p.cmd.Process != nil {
 		done := make(chan error, 1)
-		go func() { done <- p.cmd.Wait() }()
+		go func() { done <- p.reap() }()
 		select {
 		case <-done:
-		case <-time.After(500 * time.Millisecond):
-			p.cmd.Process.Kill()
+		case <-time.After(800 * time.Millisecond):
+			_ = p.cmd.Process.Kill()
+			<-done
 		}
 	}
 
-	os.Remove(p.socketPath)
+	_ = os.Remove(p.socketPath)
 	return nil
 }
 

@@ -7,6 +7,43 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// centerBlock left-pads each line so the block is centered in width cells.
+// Unlike lipgloss Width/Align, this leaves ANSI sequences intact.
+func centerBlock(s string, width int) string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" || width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		pad := (width - lipgloss.Width(line)) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		b.WriteString(strings.Repeat(" ", pad))
+		b.WriteString(line)
+		if i < len(lines)-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// padBlock adds left horizontal space without restyling ANSI content.
+func padBlock(s string, left int) string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" || left <= 0 {
+		return s
+	}
+	pad := strings.Repeat(" ", left)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = pad + line
+	}
+	return strings.Join(lines, "\n")
+}
+
 // generateQueuePanelContent draws the right rail: expanded now-playing + up next.
 func (m Model) generateQueuePanelContent(width int) string {
 	var sb strings.Builder
@@ -26,9 +63,13 @@ func (m Model) generateQueuePanelContent(width int) string {
 
 	if m.currentTrack != nil {
 		artURL := m.currentTrack.ThumbnailURL
-		art := m.cachedArtAt(artURL, queueArtWidth, queueArtHeight)
-		art = lipgloss.NewStyle().Width(inner).Align(lipgloss.Center).Render(art)
-		sb.WriteString(lipgloss.NewStyle().Padding(0, 1).Render(art))
+		aw, ah := m.queueArtDims()
+		if aw > inner {
+			aw = inner
+		}
+		art := m.cachedArtAt(artURL, aw, ah)
+		// Don't lipgloss-Width wrap halfblock ANSI — it strips colors / clips art.
+		sb.WriteString(padBlock(centerBlock(art, inner), 1))
 		sb.WriteString("\n")
 
 		title := lipgloss.NewStyle().

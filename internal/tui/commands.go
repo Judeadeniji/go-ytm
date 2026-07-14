@@ -116,28 +116,60 @@ type SearchSuggestionsMsg struct {
 	Suggestions []ytmapi.SearchSuggestionItem
 	Results     []ytmapi.SearchResult
 	Query       string
+	Gen         int
 	Err         error
 }
 
-func fetchSuggestions(apiClient *ytmapi.Client, query string) tea.Cmd {
+type suggestionsDebounceMsg struct {
+	Query string
+	Gen   int
+}
+
+const suggestionsDebounce = 180 * time.Millisecond
+
+func debounceSuggestions(query string, gen int) tea.Cmd {
+	return tea.Tick(suggestionsDebounce, func(time.Time) tea.Msg {
+		return suggestionsDebounceMsg{Query: query, Gen: gen}
+	})
+}
+
+func fetchSuggestions(apiClient *ytmapi.Client, query string, gen int) tea.Cmd {
 	return func() tea.Msg {
 		q := strings.TrimSpace(query)
 		if q == "" {
-			return SearchSuggestionsMsg{Query: query}
+			return SearchSuggestionsMsg{Query: query, Gen: gen}
 		}
-		sugs, err := apiClient.GetSearchSuggestions(q)
-		results, searchErr := apiClient.SearchFiltered(q, "", 5)
-		if err != nil && searchErr != nil {
-			return SearchSuggestionsMsg{Query: query, Err: err}
+
+		type sugOut struct {
+			items []ytmapi.SearchSuggestionItem
+			err   error
 		}
-		if err != nil {
-			err = nil // still show search hits
+		type resOut struct {
+			items []ytmapi.SearchResult
+			err   error
+		}
+		sugCh := make(chan sugOut, 1)
+		resCh := make(chan resOut, 1)
+		go func() {
+			items, err := apiClient.GetSearchSuggestions(q)
+			sugCh <- sugOut{items, err}
+		}()
+		go func() {
+			items, err := apiClient.SearchFiltered(q, "", 5)
+			resCh <- resOut{items, err}
+		}()
+		sug := <-sugCh
+		res := <-resCh
+
+		if sug.err != nil && res.err != nil {
+			return SearchSuggestionsMsg{Query: query, Gen: gen, Err: sug.err}
 		}
 		return SearchSuggestionsMsg{
-			Suggestions: sugs,
-			Results:     results,
+			Suggestions: sug.items,
+			Results:     res.items,
 			Query:       query,
-			Err:         err,
+			Gen:         gen,
+			Err:         nil,
 		}
 	}
 }

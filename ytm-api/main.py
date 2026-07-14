@@ -55,12 +55,24 @@ def search(
 
 @app.get("/suggestions")
 def suggestions(q: str = Query(..., description="The search query")):
-    """Get search suggestions with detailed runs."""
+    """Get search suggestions with detailed runs (bold typed match + history flags)."""
     try:
         results = ytmusic.get_search_suggestions(q, detailed_runs=True)
     except _CATCH as exc:
         raise _ytm_error(exc) from exc
-    return {"suggestions": results}
+    # Normalize plain strings / drop nulls so clients can decode reliably.
+    out = []
+    for item in results or []:
+        if isinstance(item, str):
+            out.append({"text": item, "runs": [{"text": item}], "fromHistory": False})
+            continue
+        if not isinstance(item, dict):
+            continue
+        cleaned = {k: v for k, v in item.items() if v is not None}
+        if "text" not in cleaned and "runs" in cleaned:
+            cleaned["text"] = "".join(r.get("text", "") for r in cleaned.get("runs") or [])
+        out.append(cleaned)
+    return {"suggestions": out}
 
 
 @app.get("/home")

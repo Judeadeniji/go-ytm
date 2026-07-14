@@ -2,14 +2,36 @@ package tui
 
 const (
 	leftSidebarWidth  = 24
-	rightSidebarWidth = 32
+	rightSidebarWidth = 36
 	// Terminal must leave room for left + right + a usable main pane.
 	minWidthForQueuePanel = leftSidebarWidth + rightSidebarWidth + 40
 	headerHeight          = 4
-
-	queueArtWidth  = 26
-	queueArtHeight = 12
 )
+
+// queueArtDims returns now-playing cover cell size for the current right rail.
+// Kept slightly under the content width so padding can't clip ANSI halfblocks.
+func (m Model) queueArtDims() (w, h int) {
+	_, _, right := m.layoutWidths()
+	if right <= 0 {
+		return 28, 12
+	}
+	// viewport is right-1; content pads 1 cell each side.
+	w = right - 1 - 2
+	if w > 32 {
+		w = 32
+	}
+	if w < 16 {
+		w = 16
+	}
+	h = (w * 6) / 13 // ~26×12
+	if h < 8 {
+		h = 8
+	}
+	if h > 14 {
+		h = 14
+	}
+	return w, h
+}
 
 // layoutWidths returns left, main, and right column widths for the current state.
 // right is 0 when the queue panel is hidden.

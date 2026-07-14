@@ -39,7 +39,7 @@ type SearchSuggestionItem struct {
 	Text          string          `json:"text"`
 	Runs          []SuggestionRun `json:"runs,omitempty"`
 	FromHistory   bool            `json:"fromHistory,omitempty"`
-	FeedbackToken string          `json:"feedbackToken,omitempty"`
+	FeedbackToken *string         `json:"feedbackToken,omitempty"` // null from ytmusicapi
 }
 
 type SuggestionRun struct {

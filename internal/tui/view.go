@@ -39,11 +39,18 @@ func (m Model) View() string {
 		searchPadding = 0
 	}
 
-	searchBox := lipgloss.NewStyle().
+	searchBoxStyle := lipgloss.NewStyle().
 		Background(colorSearchBg).
 		Foreground(colorText).
-		Padding(0, 2).Width(searchWidth).
-		Render(m.searchInput.View())
+		Padding(0, 2).Width(searchWidth)
+	if m.searchInput.Focused() {
+		// Keep the textbox visually on top of the dropdown panel.
+		searchBoxStyle = searchBoxStyle.
+			Border(lipgloss.NormalBorder(), false, false, true, false).
+			BorderForeground(colorAccent).
+			BorderBackground(colorBg)
+	}
+	searchBox := searchBoxStyle.Render(m.searchInput.View())
 
 	profileIcon := lipgloss.NewStyle().Background(colorDivider).Foreground(colorText).Render(" AJ ")
 
@@ -74,16 +81,20 @@ func (m Model) View() string {
 
 	var mainContent string
 	if m.searchInput.Focused() {
-		searchModalWidth := searchWidth + 4
+		// Dropdown sits under the search box (same width) — never wider, so it
+		// doesn't visually wrap/cover the textbox.
+		searchModalWidth := searchWidth
 		if searchModalWidth > mainWidth-2 {
 			searchModalWidth = max(24, mainWidth-2)
 		}
-		modal := m.renderSuggestionsModal(searchModalWidth)
+		modal := m.renderSuggestionsModal(searchModalWidth, mainHeight-1)
+		// 1-row gap keeps the textbox clear of the modal panel.
+		dropdown := lipgloss.JoinVertical(lipgloss.Left, "", modal)
 		mainContent = lipgloss.NewStyle().
 			Background(colorBg).Foreground(colorText).
 			Width(mainWidth).Height(mainHeight).
 			PaddingLeft(searchPadding).
-			Render(modal)
+			Render(dropdown)
 	} else {
 		mainContent = lipgloss.NewStyle().
 			Background(colorBg).Foreground(colorText).
@@ -105,8 +116,9 @@ func (m Model) View() string {
 		if innerW < 1 {
 			innerW = 1
 		}
+		// Avoid Foreground/Background on the wrapper — they override ANSI halfblock
+		// colors in the now-playing cover.
 		queuePane := lipgloss.NewStyle().
-			Background(colorBg).Foreground(colorText).
 			Width(innerW).Height(contentHeight).MaxHeight(contentHeight).
 			Render(safeViewportView(&m.rightViewport))
 		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, border, queuePane))

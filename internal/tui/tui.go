@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -37,6 +38,7 @@ type Model struct {
 	rightViewport     viewport.Model
 	searchInput       textinput.Model
 	searchSuggestions []SearchSuggestion
+	suggestionGen     int // bumps on each query change; ignores stale fetches
 	zone              *zone.Manager
 
 	searchResults    []ytmapi.SearchResult
@@ -174,7 +176,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if newVal != oldVal {
 				m.listCursor = 0
-				return m, tea.Batch(cmd, fetchSuggestions(m.ytmapiClient, newVal))
+				m.suggestionGen++
+				if strings.TrimSpace(newVal) == "" {
+					m.searchSuggestions = nil
+					return m, cmd
+				}
+				return m, tea.Batch(cmd, debounceSuggestions(newVal, m.suggestionGen))
 			}
 			return m, cmd
 		}
@@ -215,7 +222,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.listCursor = 0
 			m.searchInput.Focus()
-			return m, textinput.Blink
+			m.suggestionGen++
+			q := m.searchInput.Value()
+			cmds := []tea.Cmd{textinput.Blink}
+			if strings.TrimSpace(q) != "" {
+				cmds = append(cmds, debounceSuggestions(q, m.suggestionGen))
+			} else {
+				m.searchSuggestions = nil
+			}
+			return m, tea.Batch(cmds...)
 		case "p":
 			return m.togglePlayPause()
 		case " ":
@@ -542,8 +557,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setQueuePanelContent()
 		// Kick off any newly-visible thumbs after layout settled.
 		return m, m.enqueueVisibleImages(m.mainWidth())
+	case suggestionsDebounceMsg:
+		if msg.Gen != m.suggestionGen || msg.Query != m.searchInput.Value() {
+			return m, nil
+		}
+		return m, fetchSuggestions(m.ytmapiClient, msg.Query, msg.Gen)
 	case SearchSuggestionsMsg:
 		// Ignore stale responses from older keystrokes.
+		if msg.Gen != 0 && msg.Gen != m.suggestionGen {
+			return m, nil
+		}
 		if msg.Query != "" && msg.Query != m.searchInput.Value() {
 			return m, nil
 		}
@@ -818,7 +841,8 @@ func (m Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 	}
 
 	if m.showQueuePanel() && m.currentTrack != nil && m.currentTrack.ThumbnailURL != "" {
-		queue(m.currentTrack.ThumbnailURL, queueArtWidth, queueArtHeight)
+		aw, ah := m.queueArtDims()
+		queue(m.currentTrack.ThumbnailURL, aw, ah)
 	}
 
 	if len(cmds) == 0 {

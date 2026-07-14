@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,9 +24,24 @@ func buildSuggestionList(msg SearchSuggestionsMsg) []SearchSuggestion {
 			FromHistory: s.FromHistory,
 		})
 	}
-	for _, res := range msg.Results {
-		zid := searchResultZone(res)
-		if zid == "" {
+
+	// Prefer YouTube Music "Top result" hits, then the rest (capped).
+	ranked := append([]ytmapi.SearchResult(nil), msg.Results...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		ti := strings.EqualFold(ranked[i].Category, "Top result")
+		tj := strings.EqualFold(ranked[j].Category, "Top result")
+		if ti == tj {
+			return false
+		}
+		return ti && !tj
+	})
+	const maxEntities = 5
+	n := 0
+	for _, res := range ranked {
+		if n >= maxEntities {
+			break
+		}
+		if searchResultZone(res) == "" || strings.TrimSpace(res.Title) == "" {
 			continue
 		}
 		out = append(out, SearchSuggestion{
@@ -38,6 +54,7 @@ func buildSuggestionList(msg SearchSuggestionsMsg) []SearchSuggestion {
 			PlaylistID: res.PlaylistID,
 			ResultType: res.ResultType,
 		})
+		n++
 	}
 	return out
 }
@@ -78,7 +95,7 @@ func suggestionEntitySubtext(res ytmapi.SearchResult) string {
 	return strings.Join(parts, " · ")
 }
 
-func (m Model) renderSuggestionsModal(width int) string {
+func (m Model) renderSuggestionsModal(width, maxHeight int) string {
 	var sb strings.Builder
 	inner := width - 4
 	if inner < 20 {
@@ -118,11 +135,19 @@ func (m Model) renderSuggestionsModal(width int) string {
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Type to search…"))
 	}
 
-	return lipgloss.NewStyle().
+	body := strings.TrimRight(sb.String(), "\n")
+	style := lipgloss.NewStyle().
 		Background(colorSearchBg).
 		Width(width).
 		Padding(1, 2).
-		Render(strings.TrimRight(sb.String(), "\n"))
+		// Top border separates the dropdown from the search textbox above.
+		Border(lipgloss.NormalBorder(), true, false, false, false).
+		BorderForeground(colorDivider).
+		BorderBackground(colorSearchBg)
+	if maxHeight > 2 {
+		style = style.MaxHeight(maxHeight)
+	}
+	return style.Render(body)
 }
 
 func (m Model) renderSuggestionText(i int, s SearchSuggestion, inner int) string {
