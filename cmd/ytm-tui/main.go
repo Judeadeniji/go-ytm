@@ -8,6 +8,7 @@ import (
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
 	"github.com/judeadeniji/go-ytm/internal/tui"
+	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 )
 
 func main() {
@@ -19,8 +20,9 @@ func main() {
 	defer p.Close()
 
 	ext := search.NewExtractor()
+	apiClient := ytmapi.NewClient()
 
-	m := tui.NewModel(p, ext)
+	m := tui.NewModel(p, ext, apiClient)
 	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {

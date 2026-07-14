@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/ytmapi"
+)
 
 type Pane int
 
@@ -26,10 +29,12 @@ const (
 )
 
 type SearchSuggestion struct {
-	Type    SuggestionType
-	Text    string
-	Subtext string
-	Image   string // pre-rendered ANSI image
+	Type        SuggestionType
+	Text        string
+	Runs        []ytmapi.SuggestionRun
+	FromHistory bool
+	Subtext     string
+	Image       string // pre-rendered ANSI image
 }
 
 type StreamURLMsg struct {

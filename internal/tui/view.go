@@ -74,9 +74,9 @@ func (m Model) View() string {
 	if m.searchInput.Focused() {
 		// Render search suggestions modal
 		var sb strings.Builder
-		for _, s := range m.searchSuggestions {
+		for i, s := range m.searchSuggestions {
 			var icon string
-			if s.Type == SuggestionHistory {
+			if s.FromHistory || s.Type == SuggestionHistory {
 				icon = "\ue292" // fa_history
 			} else {
 				icon = "\ue0e3" // fa_search
@@ -90,28 +90,26 @@ func (m Model) View() string {
 				sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(s.Subtext)
 				info := lipgloss.JoinVertical(lipgloss.Left, title, sub)
 				row := lipgloss.JoinHorizontal(lipgloss.Top, img, "   ", info)
+				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
 				sb.WriteString(row)
 				sb.WriteString("\n\n")
 			} else {
-				// Text row with prefix highlighting
-				val := m.searchInput.Value()
-				text := s.Text
-				if val != "" && strings.HasPrefix(strings.ToLower(text), strings.ToLower(val)) {
-					textRunes := []rune(text)
-					valRunes := []rune(val)
-					
-					sliceIdx := len(valRunes)
-					if sliceIdx > len(textRunes) {
-						sliceIdx = len(textRunes)
+				// Text row with runs rendering
+				var textBuilder strings.Builder
+				if len(s.Runs) > 0 {
+					for _, run := range s.Runs {
+						if run.Bold {
+							textBuilder.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(run.Text))
+						} else {
+							textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(run.Text))
+						}
 					}
-					
-					prefix := string(textRunes[:sliceIdx])
-					suffix := string(textRunes[sliceIdx:])
-					text = lipgloss.NewStyle().Foreground(colorText).Render(prefix) + lipgloss.NewStyle().Foreground(colorSubtext).Render(suffix)
 				} else {
-					text = lipgloss.NewStyle().Foreground(colorSubtext).Render(text)
+					textBuilder.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(s.Text))
 				}
-				row := lipgloss.JoinHorizontal(lipgloss.Top, iconStyle.Render(icon), text)
+				
+				row := lipgloss.JoinHorizontal(lipgloss.Top, iconStyle.Render(icon), textBuilder.String())
+				row = m.zone.Mark(fmt.Sprintf("suggestion_%d", i), row)
 				sb.WriteString(row)
 				sb.WriteString("\n\n")
 			}
@@ -140,5 +138,5 @@ func (m Model) View() string {
 	rightPane := lipgloss.JoinVertical(lipgloss.Left, header, mainContent)
 
 	// Assemble All
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftSidebar, rightPane)
+	return m.zone.Scan(lipgloss.JoinHorizontal(lipgloss.Top, leftSidebar, rightPane))
 }
