@@ -11,7 +11,18 @@ import (
 )
 
 // TrackStartedMsg is sent when a track has been successfully loaded and started.
-type TrackStartedMsg struct{ Track Track }
+type TrackStartedMsg struct {
+	Track Track
+	Gen   int
+}
+
+// streamReadyMsg is the async result of resolving a stream URL for a play request.
+type streamReadyMsg struct {
+	Track Track
+	URL   string
+	Gen   int
+	Err   error
+}
 
 func fetchStreamURL(ext *search.Extractor, videoID string) tea.Cmd {
 	return func() tea.Msg {
@@ -20,17 +31,21 @@ func fetchStreamURL(ext *search.Extractor, videoID string) tea.Cmd {
 	}
 }
 
-// playTrack resolves the stream URL for t, loads it into mpv, and starts playback.
-// On success it returns TrackStartedMsg; on URL extraction failure it returns StreamURLMsg{Err: ...}.
-func playTrack(p *player.Player, ext *search.Extractor, t Track) tea.Cmd {
+// playTrack stops silence gap immediately via a separate Stop cmd; this cmd only
+// resolves the URL. Pair with stopPlayback in a Batch, then handle streamReadyMsg.
+func playTrack(ext *search.Extractor, t Track, gen int) tea.Cmd {
 	return func() tea.Msg {
 		url, err := ext.GetStreamURL(context.Background(), t.VideoID)
-		if err != nil {
-			return StreamURLMsg{Err: err}
-		}
-		p.Load(url)
-		p.Play()
-		return TrackStartedMsg{Track: t}
+		return streamReadyMsg{Track: t, URL: url, Gen: gen, Err: err}
+	}
+}
+
+// loadTrack loads a resolved URL into mpv and signals TrackStartedMsg.
+func loadTrack(p *player.Player, t Track, url string, gen int) tea.Cmd {
+	return func() tea.Msg {
+		_ = p.Load(url)
+		_ = p.Play()
+		return TrackStartedMsg{Track: t, Gen: gen}
 	}
 }
 

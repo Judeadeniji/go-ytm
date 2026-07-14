@@ -252,9 +252,9 @@ func (p *Player) DurationSeconds() (float64, error) {
 	return v, nil
 }
 
-// Load loads a URL or file path into mpv
+// Load replaces the current media with url (stops current playback first).
 func (p *Player) Load(url string) error {
-	return p.sendCommand("loadfile", url)
+	return p.sendCommand("loadfile", url, "replace")
 }
 
 // Pause pauses playback

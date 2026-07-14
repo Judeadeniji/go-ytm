@@ -55,6 +55,7 @@ type Model struct {
 	playPos          float64
 	playDuration     float64
 	queuePanelHidden bool // user dismissed the right rail
+	playGen          int  // bumped on each play request; ignores stale extracts
 
 	// Navigation / detail pages
 	stack        ViewStack
@@ -288,6 +289,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case TrackStartedMsg:
+		if msg.Gen != 0 && msg.Gen != m.playGen {
+			return m, nil // superseded by a newer skip
+		}
 		m.currentTrack = &msg.Track
 		m.isPlaying = true
 		m.playPos = 0
@@ -308,6 +312,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setQueuePanelContent()
 		return m, tea.Batch(fetchPlayProgress(m.player), m.enqueueVisibleImages(m.mainWidth()))
+	case streamReadyMsg:
+		if msg.Gen != m.playGen {
+			return m, nil // user already skipped ahead
+		}
+		if msg.Err != nil {
+			m.statusMsg = shortStreamErr(msg.Err)
+			m.isPlaying = false
+			return m, nil
+		}
+		m.statusMsg = "Starting: " + msg.Track.Title
+		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen)
 	case playProgressTickMsg:
 		if m.currentTrack == nil {
 			return m, tickPlayProgress()
@@ -612,6 +627,8 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.isPlaying = true
 	m.playPos = 0
 	m.playDuration = 0
+	m.playGen++
+	gen := m.playGen
 	m.queueCursor = m.queue.CurrentIndex()
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
@@ -621,7 +638,12 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	}
 	m.applyLayout()
 	m.setQueuePanelContent()
-	return m, tea.Batch(playTrack(m.player, m.extractor, t), m.enqueueVisibleImages(m.mainWidth()))
+	// Stop immediately so the previous track doesn't keep playing during extract.
+	return m, tea.Batch(
+		stopPlayback(m.player),
+		playTrack(m.extractor, t, gen),
+		m.enqueueVisibleImages(m.mainWidth()),
+	)
 }
 
 func (m Model) nextPane() Pane {

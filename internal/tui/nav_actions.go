@@ -153,6 +153,10 @@ func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, w
 	m.queue.AppendAndSelect(t)
 	m.currentTrack = &t
 	m.isPlaying = true
+	m.playPos = 0
+	m.playDuration = 0
+	m.playGen++
+	gen := m.playGen
 	m.statusMsg = "Loading: " + title
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
@@ -162,7 +166,11 @@ func (m Model) playVideo(videoID, title, artist, thumb string, seedWatch bool, w
 	m.applyLayout()
 	m.setQueuePanelContent()
 
-	cmds := []tea.Cmd{playTrack(m.player, m.extractor, t), m.enqueueVisibleImages(m.mainWidth())}
+	cmds := []tea.Cmd{
+		stopPlayback(m.player),
+		playTrack(m.extractor, t, gen),
+		m.enqueueVisibleImages(m.mainWidth()),
+	}
 	if seedWatch {
 		cmds = append(cmds, fetchWatch(m.ytmapiClient, videoID, watchPlaylistID, false))
 	}
