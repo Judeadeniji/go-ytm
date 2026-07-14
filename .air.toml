@@ -1,10 +1,11 @@
+#:schema https://json.schemastore.org/any.json
 root = "."
 testdata_dir = "testdata"
 tmp_dir = "tmp"
 
 [build]
   args_bin = []
-  bin = "./tmp/main"
+  entrypoint = "./tmp/main"
   cmd = "go build -o ./tmp/main ./cmd/ytm-tui/main.go"
   delay = 1000
   exclude_dir = ["downloads", "tmp", "vendor", "testdata", "ytm-api", ".git", ".agents"]
