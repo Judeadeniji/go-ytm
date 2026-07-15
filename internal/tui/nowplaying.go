@@ -56,10 +56,18 @@ func (m Model) generateNowPlayingBody(width, height int) string {
 				MaxWidth(width - 4).Render(m.currentTrack.Artist))
 			meta.WriteString("\n")
 		}
-		if m.currentTrack.Album != "" {
-			meta.WriteString(lipgloss.NewStyle().Foreground(colorDivider).
-				MaxWidth(width - 4).Render(m.currentTrack.Album))
-			meta.WriteString("\n")
+		if m.currentTrack.Album != "" || (m.songDetails != nil && m.songDetails.Album != nil && m.songDetails.Album.Name != "") {
+			albumName, _ := m.playingAlbumRef()
+			if albumName != "" {
+				albumLine := lipgloss.NewStyle().Foreground(colorAccent).
+					MaxWidth(width - 4).Render(albumName)
+				meta.WriteString(m.zone.Mark("np_album", albumLine))
+				meta.WriteString("\n")
+				viewAlbum := lipgloss.NewStyle().Foreground(colorSubtext).
+					Render("View Album")
+				meta.WriteString(m.zone.Mark("np_view_album", viewAlbum))
+				meta.WriteString("\n")
+			}
 		}
 	} else {
 		meta.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).
@@ -68,7 +76,7 @@ func (m Model) generateNowPlayingBody(width, height int) string {
 	}
 	meta.WriteString("\n")
 	meta.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).
-		Render("f / esc  close"))
+		Render("f / esc  close  ·  a View Album"))
 
 	if width >= npMinWide && m.currentTrack != nil {
 		leftW := npArtWidth + 6
@@ -594,20 +602,34 @@ func (m *Model) ensureSongDetailsFetched() tea.Cmd {
 	return fetchSongDetails(m.ytmapiClient, vid, m.songDetailsGen, ctx)
 }
 
-// applySongDetails fills gaps on the current track from get_song.
+// applySongDetails fills catalog gaps on the current track from song metadata.
 func (m *Model) applySongDetails(song *ytmapi.SongDetails) {
 	if song == nil || m.currentTrack == nil {
 		return
 	}
 	t := m.currentTrack
-	if t.Title == "" && song.Title != "" {
+	if song.Title != "" {
 		t.Title = song.Title
 	}
-	if t.Artist == "" && song.Author != "" {
-		t.Artist = song.Author
+	if names := song.ArtistNames(); names != "" {
+		t.Artist = names
 	}
-	if t.ArtistID == "" && song.ChannelID != "" {
-		t.ArtistID = song.ChannelID
+	if len(song.Artists) > 0 && song.Artists[0].ID != "" {
+		t.ArtistID = song.Artists[0].ID
+	}
+	if song.Album != nil {
+		if song.Album.Name != "" {
+			t.Album = song.Album.Name
+		}
+		if song.Album.ID != "" {
+			t.AlbumID = song.Album.ID
+		}
+	}
+	if song.Duration != "" {
+		t.Duration = song.Duration
+	}
+	if song.IsExplicit {
+		t.IsExplicit = true
 	}
 	if t.ThumbnailURL == "" && len(song.Thumbnails) > 0 {
 		t.ThumbnailURL = song.Thumbnails[len(song.Thumbnails)-1].URL
@@ -615,21 +637,4 @@ func (m *Model) applySongDetails(song *ytmapi.SongDetails) {
 			t.ThumbnailURL = song.Thumbnails[0].URL
 		}
 	}
-	if t.Duration == "" && song.LengthSeconds != "" {
-		t.Duration = formatLengthSeconds(song.LengthSeconds)
-	}
-}
-
-func formatLengthSeconds(s string) string {
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return s
-		}
-		n = n*10 + int(c-'0')
-	}
-	if n <= 0 {
-		return ""
-	}
-	return formatClock(float64(n))
 }

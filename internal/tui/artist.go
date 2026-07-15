@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 )
 
 func (m Model) generateArtistContent(mainWidth int) string {
@@ -16,10 +17,18 @@ func (m Model) generateArtistContent(mainWidth int) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(a.Name)
 	metaParts := []string{}
 	if a.Subscribers != "" {
-		metaParts = append(metaParts, a.Subscribers+" subscribers")
+		sub := ytmapi.FormatCount(a.Subscribers)
+		if sub == "" {
+			sub = a.Subscribers
+		}
+		metaParts = append(metaParts, sub+" subscribers")
 	}
 	if a.MonthlyListeners != "" {
-		metaParts = append(metaParts, a.MonthlyListeners+" monthly listeners")
+		ml := ytmapi.FormatCount(a.MonthlyListeners)
+		if ml == "" {
+			ml = a.MonthlyListeners
+		}
+		metaParts = append(metaParts, ml+" monthly listeners")
 	}
 	meta := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(metaParts, "  ·  "))
 
@@ -55,6 +64,13 @@ func (m Model) generateArtistContent(mainWidth int) string {
 			switch kind {
 			case "song":
 				sub = artistRefName(item["album"])
+				if v := ytmapi.FormatCount(mapStr(item, "views")); v != "" {
+					if sub != "" {
+						sub = sub + " · " + v
+					} else {
+						sub = v
+					}
+				}
 				if sub == "" {
 					sub = "Song"
 				}
@@ -69,9 +85,11 @@ func (m Model) generateArtistContent(mainWidth int) string {
 					}
 				}
 			case "video":
-				sub = mapStr(item, "views")
+				sub = ytmapi.FormatCount(mapStr(item, "views"))
 				if sub == "" {
 					sub = "Video"
+				} else {
+					sub += " plays"
 				}
 			case "related":
 				sub = mapStr(item, "subscribers")

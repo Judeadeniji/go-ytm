@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 )
 
 // RailTab selects which surface the right sidebar is showing.
@@ -166,8 +167,13 @@ func (m Model) renderRailQueue(inner int) string {
 		pos = m.scrubPos
 	}
 	state := "Paused"
-	if m.isPlaying {
+	switch {
+	case m.audioLoading():
+		state = "Loading"
+	case m.isPlaying:
 		state = "Playing"
+	case m.audioPending():
+		state = "Ready"
 	}
 	sb.WriteString(lipgloss.NewStyle().
 		Padding(1, 1, 0, 1).
@@ -196,30 +202,39 @@ func (m Model) renderRailDetails(inner int) string {
 	}
 
 	t := m.currentTrack
+	sd := m.songDetails
+
+	title := t.Title
+	if sd != nil && sd.Title != "" {
+		title = sd.Title
+	}
 	sb.WriteString("\n")
 	sb.WriteString(pad(lipgloss.NewStyle().Bold(true).Foreground(colorText).
-		MaxWidth(inner).Render(t.Title)))
+		MaxWidth(inner).Render(title)))
 	sb.WriteString("\n")
 
-	if t.Artist != "" {
-		artist := lipgloss.NewStyle().Foreground(colorAccent).MaxWidth(inner).Render(t.Artist)
+	artistName := t.Artist
+	if sd != nil {
+		if names := sd.ArtistNames(); names != "" {
+			artistName = names
+		}
+	}
+	if artistName != "" {
+		artist := lipgloss.NewStyle().Foreground(colorAccent).MaxWidth(inner).Render(artistName)
 		sb.WriteString(m.zone.Mark("rail_meta_artist", pad(artist)))
-		sb.WriteString("\n")
-		sb.WriteString(pad(lipgloss.NewStyle().Foreground(colorSubtext).
-			Render("artist · click to open")))
 		sb.WriteString("\n")
 	}
 
 	albumName := t.Album
+	if sd != nil && sd.Album != nil && sd.Album.Name != "" {
+		albumName = sd.Album.Name
+	}
 	if albumName != "" {
 		album := lipgloss.NewStyle().Foreground(colorAccent).MaxWidth(inner).Render(albumName)
 		sb.WriteString(m.zone.Mark("rail_meta_album", pad(album)))
 		sb.WriteString("\n")
-		hint := "album · click to open"
-		if t.AlbumID == "" {
-			hint = "album · click to search"
-		}
-		sb.WriteString(pad(lipgloss.NewStyle().Foreground(colorSubtext).Render(hint)))
+		viewAlbum := lipgloss.NewStyle().Foreground(colorSubtext).Render("View Album")
+		sb.WriteString(m.zone.Mark("rail_meta_view_album", pad(viewAlbum)))
 		sb.WriteString("\n")
 	}
 
@@ -228,73 +243,60 @@ func (m Model) renderRailDetails(inner int) string {
 		Render(strings.Repeat("─", max(4, inner))))
 	sb.WriteString("\n\n")
 
-	pos := m.playPos
-	if m.scrubbing {
-		pos = m.scrubPos
-	}
-	state := "Paused"
-	if m.isPlaying {
-		state = "Playing"
-	}
-	if !m.audioLoaded {
-		state = "Ready"
-	}
-
-	sb.WriteString(m.renderMetaRow(inner, "Status", state))
-	volLabel := fmt.Sprintf("%d%%", int(m.volume+0.5))
-	if m.muted {
-		volLabel = "Muted"
-	}
-	sb.WriteString(m.renderMetaRow(inner, "Volume", volLabel))
-	sb.WriteString(m.renderMetaRow(inner, "Position", formatClock(pos)))
-	dur := m.effectiveDuration()
-	durLabel := formatClock(dur)
-	if dur <= 0 && t.Duration != "" {
-		durLabel = t.Duration
-	}
-	sb.WriteString(m.renderMetaRow(inner, "Duration", durLabel))
-	if dur > 0 {
-		pct := int((pos / dur) * 100)
-		if pct < 0 {
-			pct = 0
-		}
-		if pct > 100 {
-			pct = 100
-		}
-		sb.WriteString(m.renderMetaRow(inner, "Progress", fmt.Sprintf("%d%%", pct)))
-	}
-	if t.IsExplicit {
-		sb.WriteString(m.renderMetaRow(inner, "Content", "Explicit"))
-	}
-	if t.VideoID != "" {
-		sb.WriteString(m.renderMetaRow(inner, "Video", t.VideoID))
-	}
-
 	switch {
 	case m.songDetailsLoading:
-		sb.WriteString(m.renderMetaRow(inner, "Meta", "Loading…"))
+		sb.WriteString(pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("Loading song metadata…")))
+		sb.WriteString("\n\n")
 	case m.songDetailsErr != "":
-		sb.WriteString(m.renderMetaRow(inner, "Meta", m.songDetailsErr))
-	case m.songDetails != nil:
-		sd := m.songDetails
-		if typ := songTypeLabel(sd.MusicVideoType); typ != "" {
-			sb.WriteString(m.renderMetaRow(inner, "Type", typ))
+		sb.WriteString(pad(lipgloss.NewStyle().Foreground(colorSubtext).Render(m.songDetailsErr)))
+		sb.WriteString("\n\n")
+	case sd != nil:
+		if sd.AlbumType != "" {
+			sb.WriteString(m.renderMetaRow(inner, "Release", sd.AlbumType))
 		}
-		if sd.ViewCount != "" {
-			sb.WriteString(m.renderMetaRow(inner, "Views", formatViewCount(sd.ViewCount)))
+		if sd.Year != "" {
+			sb.WriteString(m.renderMetaRow(inner, "Year", sd.Year))
 		}
-		if sd.PublishDate != "" {
-			sb.WriteString(m.renderMetaRow(inner, "Published", sd.PublishDate))
+		if sd.TrackNumber != nil {
+			track := fmt.Sprintf("%d", *sd.TrackNumber)
+			if sd.AlbumTrackCount > 0 {
+				track = fmt.Sprintf("%d of %d", *sd.TrackNumber, sd.AlbumTrackCount)
+			}
+			sb.WriteString(m.renderMetaRow(inner, "Track", track))
 		}
-		if sd.Category != "" {
-			sb.WriteString(m.renderMetaRow(inner, "Category", sd.Category))
+		dur := sd.Duration
+		if dur == "" && t.Duration != "" {
+			dur = t.Duration
 		}
-		if sd.ChannelID != "" {
-			sb.WriteString(m.renderMetaRow(inner, "Channel", sd.ChannelID))
+		if dur != "" {
+			sb.WriteString(m.renderMetaRow(inner, "Length", dur))
 		}
+		if sd.IsExplicit || t.IsExplicit {
+			sb.WriteString(m.renderMetaRow(inner, "Content", "Explicit"))
+		}
+
+		if sd.Credits != nil {
+			sb.WriteString("\n")
+			sb.WriteString(pad(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Credits")))
+			sb.WriteString("\n")
+			sb.WriteString(m.renderCreditSection(inner, sd.Credits.PerformedBy))
+			sb.WriteString(m.renderCreditSection(inner, sd.Credits.WrittenBy))
+			sb.WriteString(m.renderCreditSection(inner, sd.Credits.ProducedBy))
+			for i := range sd.Credits.OtherSections {
+				sb.WriteString(m.renderCreditSection(inner, &sd.Credits.OtherSections[i]))
+			}
+		}
+		sb.WriteString("\n")
+	default:
+		if t.Duration != "" {
+			sb.WriteString(m.renderMetaRow(inner, "Length", t.Duration))
+		}
+		if t.IsExplicit {
+			sb.WriteString(m.renderMetaRow(inner, "Content", "Explicit"))
+		}
+		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\n")
 	sb.WriteString(lipgloss.NewStyle().Padding(0, 1).Foreground(colorDivider).
 		Render(strings.Repeat("─", max(4, inner))))
 	sb.WriteString("\n\n")
@@ -336,6 +338,25 @@ func (m Model) renderRailDetails(inner int) string {
 	return sb.String()
 }
 
+func (m Model) renderCreditSection(inner int, sec *ytmapi.CreditSection) string {
+	if sec == nil || len(sec.Data) == 0 {
+		return ""
+	}
+	title := sec.LocalizedTitle
+	if title == "" {
+		title = "Credits"
+	}
+	var sb strings.Builder
+	sb.WriteString(lipgloss.NewStyle().Padding(0, 1).Foreground(colorSubtext).
+		Width(inner).MaxWidth(inner).Render(title))
+	sb.WriteString("\n")
+	names := strings.Join(sec.Data, ", ")
+	sb.WriteString(lipgloss.NewStyle().Padding(0, 1).Foreground(colorText).
+		Width(inner).MaxWidth(inner).Render(names))
+	sb.WriteString("\n")
+	return sb.String()
+}
+
 func (m Model) renderMetaRow(inner int, key, val string) string {
 	k := lipgloss.NewStyle().Foreground(colorSubtext).Width(10).Render(key)
 	v := lipgloss.NewStyle().Foreground(colorText).MaxWidth(inner - 12).Render(val)
@@ -359,41 +380,6 @@ func (m Model) lyricsStatusLabel() string {
 		return "Not found"
 	default:
 		return "—"
-	}
-}
-
-func songTypeLabel(musicVideoType string) string {
-	switch musicVideoType {
-	case "MUSIC_VIDEO_TYPE_ATV":
-		return "Song"
-	case "MUSIC_VIDEO_TYPE_OMV":
-		return "Official video"
-	case "MUSIC_VIDEO_TYPE_UGC":
-		return "User upload"
-	case "":
-		return ""
-	default:
-		return musicVideoType
-	}
-}
-
-func formatViewCount(s string) string {
-	var n int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return s
-		}
-		n = n*10 + int64(c-'0')
-	}
-	switch {
-	case n >= 1_000_000_000:
-		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fK", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d", n)
 	}
 }
 
@@ -562,20 +548,32 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	}
 
 	if m.zone.Get("rail_meta_artist").InBounds(msg) {
-		if m.currentTrack == nil || m.currentTrack.Artist == "" {
+		if m.currentTrack == nil {
+			return m, nil, true
+		}
+		artist := m.currentTrack.Artist
+		artistID := m.currentTrack.ArtistID
+		if m.songDetails != nil {
+			if names := m.songDetails.ArtistNames(); names != "" {
+				artist = names
+			}
+			if len(m.songDetails.Artists) > 0 && m.songDetails.Artists[0].ID != "" {
+				artistID = m.songDetails.Artists[0].ID
+			}
+		}
+		if artist == "" {
 			return m, nil, true
 		}
 		if m.nowPlayingOpen {
 			m = m.closeNowPlaying()
 		}
-		if id := m.currentTrack.ArtistID; id != "" {
+		if artistID != "" {
 			m.searchInput.Blur()
 			m.statusMsg = "Opening artist…"
 			m.markSessionDirty()
-			mm, cmd := m.openArtist(id)
+			mm, cmd := m.openArtist(artistID)
 			return mm, cmd, true
 		}
-		artist := m.currentTrack.Artist
 		m.searchInput.Blur()
 		m.searchInput.SetValue(artist)
 		m.lastSearchQuery = artist
@@ -585,29 +583,9 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		m.navGen++
 		return m, doSearchFiltered(m.ytmapiClient, artist, "artists", m.navGen), true
 	}
-	if m.zone.Get("rail_meta_album").InBounds(msg) {
-		if m.currentTrack == nil || m.currentTrack.Album == "" {
-			return m, nil, true
-		}
-		if m.nowPlayingOpen {
-			m = m.closeNowPlaying()
-		}
-		if id := m.currentTrack.AlbumID; id != "" {
-			m.searchInput.Blur()
-			m.statusMsg = "Opening album…"
-			m.markSessionDirty()
-			mm, cmd := m.openAlbum(id)
-			return mm, cmd, true
-		}
-		album := m.currentTrack.Album
-		m.searchInput.Blur()
-		m.searchInput.SetValue(album)
-		m.lastSearchQuery = album
-		m.searchFilter = "albums"
-		m.statusMsg = "Searching albums: " + album
-		m.markSessionDirty()
-		m.navGen++
-		return m, doSearchFiltered(m.ytmapiClient, album, "albums", m.navGen), true
+	if m.zone.Get("rail_meta_album").InBounds(msg) || m.zone.Get("rail_meta_view_album").InBounds(msg) {
+		mm, cmd := m.goToPlayingAlbum()
+		return mm, cmd, true
 	}
 	if m.zone.Get("rail_meta_lyrics_refresh").InBounds(msg) {
 		if m.currentTrack == nil {

@@ -93,6 +93,76 @@ func (m Model) openOlak(audioPlaylistID string) (Model, tea.Cmd) {
 	return m, fetchAlbumFromAudioPlaylist(m.ytmapiClient, audioPlaylistID, m.navGen)
 }
 
+// playingAlbumRef returns the album name + browse/playlist id for the current track.
+func (m Model) playingAlbumRef() (name, id string) {
+	if m.currentTrack == nil {
+		return "", ""
+	}
+	name = m.currentTrack.Album
+	id = m.currentTrack.AlbumID
+	if m.songDetails != nil && m.songDetails.Album != nil {
+		if m.songDetails.Album.Name != "" {
+			name = m.songDetails.Album.Name
+		}
+		if m.songDetails.Album.ID != "" {
+			id = m.songDetails.Album.ID
+		}
+	}
+	return name, id
+}
+
+// goToPlayingAlbum opens the Album/Single/EP page for the playing song ("View Album").
+// It does not open community playlists — only MPRE* / OLAK5uy_* release ids.
+func (m Model) goToPlayingAlbum() (Model, tea.Cmd) {
+	if m.currentTrack == nil {
+		return m, nil
+	}
+	name, id := m.playingAlbumRef()
+
+	if isAlbumBrowseID(id) {
+		if m.nowPlayingOpen {
+			m = m.closeNowPlaying()
+		}
+		m.searchInput.Blur()
+		m.statusMsg = "View Album…"
+		m.markSessionDirty()
+		return m.openAlbum(id)
+	}
+	if isAlbumAudioPlaylistID(id) {
+		if m.nowPlayingOpen {
+			m = m.closeNowPlaying()
+		}
+		m.searchInput.Blur()
+		m.statusMsg = "View Album…"
+		m.markSessionDirty()
+		return m.openOlak(id)
+	}
+
+	// Resolve from song metadata when we only know the video id.
+	if m.currentTrack.VideoID != "" {
+		if m.nowPlayingOpen {
+			m = m.closeNowPlaying()
+		}
+		m.searchInput.Blur()
+		m.statusMsg = "View Album…"
+		m.navGen++
+		m.pageLoading = true
+		m.markSessionDirty()
+		return m, resolvePlayingAlbum(m.ytmapiClient, m.currentTrack.VideoID, name, m.navGen)
+	}
+
+	m.statusMsg = "View Album unavailable"
+	return m, nil
+}
+
+func isAlbumBrowseID(id string) bool {
+	return strings.HasPrefix(id, "MPRE")
+}
+
+func isAlbumAudioPlaylistID(id string) bool {
+	return strings.HasPrefix(id, "OLAK5uy_") || strings.HasPrefix(id, "OLA")
+}
+
 func (m Model) openPlaylist(playlistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading playlist…")
 	return m, fetchPlaylist(m.ytmapiClient, playlistID, m.navGen)
@@ -203,6 +273,7 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	m.resumeSeekTries = 0
 	m.playPos = 0
 	m.playDuration = 0
+	m.playBuffered = 0
 	m.playGen++
 	gen := m.playGen
 	m.cancelPlayExtract()

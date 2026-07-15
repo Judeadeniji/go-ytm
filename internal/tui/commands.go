@@ -49,21 +49,15 @@ func playTrack(ext *search.Extractor, t Track, gen int, ctx context.Context) tea
 }
 
 // loadTrack loads a resolved URL into mpv and signals TrackStartedMsg.
-// When seekTo > 0, uses loadfile start= then SeekUntil so session resume
-// can catch seekable HTTP streams after the demuxer settles.
+// When seekTo > 0, loads normally then SeekUntil — LoadAt(start=) often fails
+// silently on HTTP stream hosts after session restore.
 // ctx cancels mid-retry seeks when the user skips (playCancel).
 func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		var err error
-		if seekTo >= 0.5 {
-			err = p.LoadAt(url, seekTo)
-		} else {
-			err = p.Load(url)
-		}
-		if err != nil {
+		if err := p.Load(url); err != nil {
 			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
 		if err := p.Play(); err != nil {

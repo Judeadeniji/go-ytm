@@ -62,8 +62,9 @@ func (m Model) generateAlbumContent(mainWidth int) string {
 	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat("─", max(10, mainWidth-4))))
 	sb.WriteString("\n\n")
 
+	viewsW := tracklistViewsWidth(tracks)
 	for i, tr := range tracks {
-		sb.WriteString(m.renderTrackRow(i, tr, mainWidth, i == m.trackCursor))
+		sb.WriteString(m.renderTrackRow(i, tr, mainWidth, i == m.trackCursor, viewsW))
 		sb.WriteString("\n")
 	}
 

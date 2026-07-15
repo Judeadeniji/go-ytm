@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
@@ -19,6 +20,15 @@ type AlbumMsg struct {
 	Page     *ytmapi.AlbumPage
 	BrowseID string
 	Gen      int
+	Err      error
+}
+
+// resolveAlbumMsg is the result of looking up an album release for a playing song.
+type resolveAlbumMsg struct {
+	Gen      int
+	BrowseID string
+	AudioID  string
+	Name     string
 	Err      error
 }
 
@@ -57,6 +67,38 @@ func fetchAlbumFromAudioPlaylist(api *ytmapi.Client, audioPlaylistID string, gen
 		}
 		page, err := api.GetAlbum(context.Background(), browseID)
 		return AlbumMsg{Page: page, BrowseID: browseID, Gen: gen, Err: err}
+	}
+}
+
+// resolvePlayingAlbum finds the Album/Single/EP browse id for a video via song metadata.
+func resolvePlayingAlbum(api *ytmapi.Client, videoID, fallbackName string, gen int) tea.Cmd {
+	return func() tea.Msg {
+		if api == nil || videoID == "" {
+			return resolveAlbumMsg{Gen: gen, Name: fallbackName, Err: fmt.Errorf("unavailable")}
+		}
+		song, err := api.GetSong(context.Background(), videoID)
+		if err != nil {
+			return resolveAlbumMsg{Gen: gen, Name: fallbackName, Err: err}
+		}
+		name := fallbackName
+		id := ""
+		if song != nil && song.Album != nil {
+			if song.Album.Name != "" {
+				name = song.Album.Name
+			}
+			id = song.Album.ID
+		}
+		if strings.HasPrefix(id, "MPRE") {
+			return resolveAlbumMsg{Gen: gen, BrowseID: id, Name: name}
+		}
+		if strings.HasPrefix(id, "OLAK5uy_") || strings.HasPrefix(id, "OLA") {
+			return resolveAlbumMsg{Gen: gen, AudioID: id, Name: name}
+		}
+		return resolveAlbumMsg{
+			Gen:  gen,
+			Name: name,
+			Err:  fmt.Errorf("not an album/EP release"),
+		}
 	}
 }
 

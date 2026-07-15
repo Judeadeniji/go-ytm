@@ -75,7 +75,7 @@ func (m Model) snapshot() session.Snapshot {
 		PlayDuration:     dur,
 		Volume:           m.volume,
 		Muted:            m.muted,
-		WasPlaying:       m.isPlaying,
+		WasPlaying:       false, // always restore paused; ignore prior play flag
 		NowPlayingOpen:   m.nowPlayingOpen,
 		QueueIndex:       m.queue.CurrentIndex(),
 		ShowSearch:       len(m.searchResults) > 0,
@@ -150,6 +150,7 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	m.queueCursor = snap.QueueCursor
 	m.playPos = snap.PlayPos
 	m.playDuration = snap.PlayDuration
+	m.playBuffered = 0
 	m.resumeSeek = snap.PlayPos
 	m.resumeSeekTries = 0
 	if snap.PlayPos >= 0.5 {
@@ -219,9 +220,8 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	var cmds []tea.Cmd
 	cmds = append(cmds, applyVol)
 
-	if snap.WasPlaying && m.currentTrack != nil {
-		cmds = append(cmds, m.cmdResumeUnloadedTrack())
-	}
+	// Always restore paused — auto-play races init (home fetch, volume, mpv)
+	// and leaves a half-loaded player that only recovers after changing tracks.
 
 	// Re-fetch the top of the stack so the page is live again.
 	if sc, ok := m.stack.Current(); ok && sc.ID != "" {
@@ -252,6 +252,10 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 		return nil
 	}
 	t := *m.currentTrack
+	if t.VideoID == "" {
+		m.statusMsg = "Cannot resume: missing video id"
+		return nil
+	}
 	if m.resumeSeek < 0.5 && m.playPos >= 0.5 {
 		m.resumeSeek = m.playPos
 	}
@@ -270,7 +274,8 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 	} else {
 		m.statusMsg = "Resuming: " + t.Title
 	}
-	return playTrack(m.extractor, t, gen, ctx)
+	// Match beginPlay: stop before extract/load so mpv can't race a stale loadfile.
+	return tea.Sequence(stopPlayback(m.player), playTrack(m.extractor, t, gen, ctx))
 }
 
 func (m *Model) markSessionDirty() {

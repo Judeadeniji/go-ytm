@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -83,9 +82,9 @@ type Model struct {
 	queue            Queue
 	currentTrack     *Track
 	isPlaying        bool
-	progress         progress.Model
 	playPos          float64
 	playDuration     float64
+	playBuffered     float64 // demuxer cache end (seconds) for buffer overlay
 	scrubbing        bool    // true while dragging/clicking the progress bar
 	scrubPos         float64 // preview position while scrubbing
 	volume           float64 // 0–100 UI/mpv volume
@@ -174,7 +173,6 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		extractor:         ext,
 		statusMsg:         status,
 		queue:             Queue{current: -1},
-		progress:          newProgressBar(40),
 		volume:            100,
 		sessionStore:      store,
 		lyricsFollow:      true,
@@ -354,9 +352,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.audioLoaded = false
 			m.playPos = 0
 			m.playDuration = 0
+			m.playBuffered = 0
 			m.markSessionDirty()
 			m.setQueuePanelContent()
 			return m, stopPlayback(m.player)
+		case "a":
+			return m.goToPlayingAlbum()
 		case "n":
 			return m.playNext()
 		case "b":
@@ -511,6 +512,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep restored/session duration until mpv reports a real one.
 		if m.resumeSeek < 0.5 {
 			m.playDuration = 0
+			m.playBuffered = 0
+		} else if m.playBuffered < m.playPos {
+			m.playBuffered = m.playPos
 		}
 		if msg.SeekOnlyErr {
 			m.statusMsg = "Playing (seek failed): " + msg.Track.Title
@@ -709,8 +713,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return mm, tea.Batch(cmd, rearm)
 	case playProgressTickMsg:
-		if m.currentTrack == nil || !m.audioLoaded {
-			// Keep restored playPos intact while mpv has nothing loaded.
+		if m.currentTrack == nil {
+			return m, tickPlayProgress()
+		}
+		if !m.audioLoaded {
+			// Keep restored playPos intact; tick faster while showing load pulse.
+			if m.audioLoading() {
+				return m, tickAudioLoading()
+			}
 			return m, tickPlayProgress()
 		}
 		return m, tea.Batch(fetchPlayProgress(m.player), tickPlayProgress())
@@ -718,6 +728,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil && m.audioLoaded {
 			if msg.Duration > 0 {
 				m.playDuration = msg.Duration
+			}
+			if msg.Buffered > 0 {
+				m.playBuffered = msg.Buffered
 			}
 			var cmds []tea.Cmd
 			// Don't fight the mouse while scrubbing the progress bar.
@@ -828,6 +841,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
 		return m, m.enqueueVisibleImages(m.mainWidth())
+	case resolveAlbumMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.pageLoading = false
+		if msg.BrowseID != "" {
+			if m.currentTrack != nil {
+				m.currentTrack.AlbumID = msg.BrowseID
+				if msg.Name != "" {
+					m.currentTrack.Album = msg.Name
+				}
+			}
+			return m.openAlbum(msg.BrowseID)
+		}
+		if msg.AudioID != "" {
+			if m.currentTrack != nil {
+				m.currentTrack.AlbumID = msg.AudioID
+				if msg.Name != "" {
+					m.currentTrack.Album = msg.Name
+				}
+			}
+			return m.openOlak(msg.AudioID)
+		}
+		m.statusMsg = "View Album unavailable"
+		m.setMainContent()
+		return m, nil
 	case AlbumMsg:
 		if msg.Gen != 0 && msg.Gen != m.navGen {
 			return m, nil
@@ -1025,6 +1064,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.zone.Get("player_nowplaying").InBounds(mouseMsg) {
 				return m.openNowPlaying()
 			}
+			if m.zone.Get("np_album").InBounds(mouseMsg) || m.zone.Get("np_view_album").InBounds(mouseMsg) {
+				return m.goToPlayingAlbum()
+			}
 			if mm, cmd, handled := m.handleRailPanelClick(mouseMsg); handled {
 				return mm, cmd
 			}
@@ -1142,6 +1184,7 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.resumeSeekTries = 0
 	m.playPos = 0
 	m.playDuration = 0
+	m.playBuffered = 0
 	m.playGen++
 	gen := m.playGen
 	m.cancelPlayExtract()

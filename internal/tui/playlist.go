@@ -37,6 +37,9 @@ func (m Model) generatePlaylistContent(mainWidth int) string {
 	if p.Duration != "" {
 		metaParts = append(metaParts, p.Duration)
 	}
+	if views := ytmapi.FormatCountAny(p.Views); views != "" {
+		metaParts = append(metaParts, views+" plays")
+	}
 	if p.Year != "" {
 		metaParts = append(metaParts, p.Year)
 	}
@@ -68,9 +71,10 @@ func (m Model) generatePlaylistContent(mainWidth int) string {
 		return sb.String()
 	}
 
+	viewsW := tracklistViewsWidth(tracks)
 	for i, tr := range tracks {
 		focused := i == m.trackCursor
-		sb.WriteString(m.renderTrackRow(i, tr, mainWidth, focused))
+		sb.WriteString(m.renderTrackRow(i, tr, mainWidth, focused, viewsW))
 		sb.WriteString("\n")
 	}
 

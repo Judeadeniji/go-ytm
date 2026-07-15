@@ -163,7 +163,7 @@ func homeCardSubtitle(card ytmapi.HomeCarouselItem) string {
 		return card.Year
 	}
 	if card.Views != "" {
-		return card.Views
+		return ytmapi.FormatCount(card.Views)
 	}
 	if card.Subscribers != "" {
 		return card.Subscribers + " subs"
@@ -321,7 +321,7 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 				subParts = append(subParts, res.Duration)
 			}
 			if res.Views != "" {
-				subParts = append(subParts, res.Views)
+				subParts = append(subParts, ytmapi.FormatCount(res.Views)+" plays")
 			}
 			if res.ItemCount != "" {
 				subParts = append(subParts, res.ItemCount+" tracks")

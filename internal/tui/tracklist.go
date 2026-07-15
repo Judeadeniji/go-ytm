@@ -73,7 +73,8 @@ func firstThumbURL(thumbs []ytmapi.Thumbnail) string {
 }
 
 // renderTrackRow draws one full-width tracklist line with focus and now-playing state.
-func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused bool) string {
+// viewsW > 0 reserves a right-aligned views/plays column before duration.
+func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused bool, viewsW int) string {
 	playing := m.currentTrack != nil && m.currentTrack.VideoID == tr.VideoID
 
 	bg := colorBg
@@ -97,8 +98,12 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 
 	numW := 4
 	durW := 7
-	// Full width: indicator + number + title + artist + duration
-	textBudget := mainWidth - 4 - 2 - numW - durW - 4
+	viewsGap := 0
+	if viewsW > 0 {
+		viewsGap = 1
+	}
+	// Full width: indicator + number + title + artist + optional views + duration
+	textBudget := mainWidth - 4 - 2 - numW - durW - viewsW - viewsGap - 4
 	if textBudget < 16 {
 		textBudget = 16
 	}
@@ -119,16 +124,23 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 	artist := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(artistW).MaxWidth(artistW).Render(tr.ArtistName())
 	dur := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(durW).Align(lipgloss.Right).Render(tr.DurationLabel())
 
-	row := lipgloss.JoinHorizontal(lipgloss.Center,
+	parts := []string{
 		indStyle.Render(indicator),
 		" ",
 		num,
 		title,
 		" ",
 		artist,
-		" ",
-		dur,
-	)
+	}
+	if viewsW > 0 {
+		views := ytmapi.FormatCount(tr.Views)
+		parts = append(parts, " ",
+			lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(viewsW).Align(lipgloss.Right).Render(views),
+		)
+	}
+	parts = append(parts, " ", dur)
+
+	row := lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 
 	row = lipgloss.NewStyle().Background(bg).Width(mainWidth - 2).MaxWidth(mainWidth - 2).Render(row)
 
@@ -136,6 +148,30 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 		row = m.zone.Mark("play_video_"+tr.VideoID, row)
 	}
 	return row
+}
+
+// tracklistViewsWidth returns a views column width when any track has a count, else 0.
+func tracklistViewsWidth(tracks []ytmapi.TrackItem) int {
+	w := 0
+	for _, tr := range tracks {
+		v := ytmapi.FormatCount(tr.Views)
+		if v == "" {
+			continue
+		}
+		if len(v) > w {
+			w = len(v)
+		}
+	}
+	if w == 0 {
+		return 0
+	}
+	if w < 4 {
+		w = 4
+	}
+	if w > 8 {
+		w = 8
+	}
+	return w
 }
 
 // ensureTrackCursorInView nudges the main viewport so the focused row stays visible.

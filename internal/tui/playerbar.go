@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/judeadeniji/go-ytm/internal/player"
@@ -18,6 +17,7 @@ const playerBarHeight = 4
 type playProgressMsg struct {
 	Pos      float64
 	Duration float64
+	Buffered float64 // demuxer cache end (seconds); 0 if unknown
 	Err      error
 }
 
@@ -25,6 +25,13 @@ type playProgressTickMsg time.Time
 
 func tickPlayProgress() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return playProgressTickMsg(t)
+	})
+}
+
+// tickAudioLoading refreshes the indeterminate buffer pulse while audio loads.
+func tickAudioLoading() tea.Cmd {
+	return tea.Tick(90*time.Millisecond, func(t time.Time) tea.Msg {
 		return playProgressTickMsg(t)
 	})
 }
@@ -42,21 +49,15 @@ func fetchPlayProgress(p *player.Player) tea.Cmd {
 		if err != nil {
 			return playProgressMsg{Pos: pos, Err: err}
 		}
-		return playProgressMsg{Pos: pos, Duration: dur}
+		buf, _ := p.BufferedSeconds()
+		if buf < pos {
+			buf = pos
+		}
+		if dur > 0 && buf > dur {
+			buf = dur
+		}
+		return playProgressMsg{Pos: pos, Duration: dur, Buffered: buf}
 	}
-}
-
-func newProgressBar(width int) progress.Model {
-	if width < 10 {
-		width = 10
-	}
-	m := progress.New(
-		progress.WithSolidFill(string(colorAccent)),
-		progress.WithoutPercentage(),
-		progress.WithWidth(width),
-	)
-	m.EmptyColor = string(colorDivider)
-	return m
 }
 
 // generatePlayerBar renders the bottom now-playing bar:
@@ -81,7 +82,10 @@ func (m Model) generatePlayerBar(width int) string {
 
 	prevBtn := m.zone.Mark("player_prev", btnStyle.Render("⏮"))
 	playIcon := "▶"
-	if m.isPlaying {
+	switch {
+	case m.audioLoading():
+		playIcon = loadingSpinnerFrame()
+	case m.isPlaying:
 		playIcon = "⏸"
 	}
 	playBtn := m.zone.Mark("player_play", btnStyle.Render(playIcon))
@@ -100,6 +104,11 @@ func (m Model) generatePlayerBar(width int) string {
 			trackInfo = infoStyle.Render(title) + artistStyle.Render("  —  "+artist)
 		} else {
 			trackInfo = infoStyle.Render(title)
+		}
+		if m.audioLoading() {
+			trackInfo += artistStyle.Render("  ·  loading")
+		} else if m.audioPending() {
+			trackInfo += artistStyle.Render("  ·  ready")
 		}
 		trackInfo = m.zone.Mark("player_nowplaying", trackInfo)
 	} else {
@@ -152,20 +161,22 @@ func (m Model) generatePlayerBar(width int) string {
 		barWidth = 8
 	}
 
-	pct := 0.0
-	if dur > 0 {
-		pct = pos / dur
-		if pct < 0 {
-			pct = 0
+	var bar string
+	playPct, bufPct := m.progressPercents(pos, dur)
+	switch {
+	case m.audioLoading():
+		// Buffer layer pulses while resolving; playhead sits at resume target.
+		bufPct = loadingBufferPct()
+		if playPct > bufPct {
+			bufPct = playPct
 		}
-		if pct > 1 {
-			pct = 1
-		}
+		bar = m.zone.Mark("player_progress", renderLayeredProgress(barWidth, playPct, bufPct, colorSubtext, colorBuffer))
+	case m.audioPending():
+		// Restored seek target as muted playhead; no buffer yet.
+		bar = m.zone.Mark("player_progress", renderLayeredProgress(barWidth, playPct, playPct, colorSubtext, colorBuffer))
+	default:
+		bar = m.zone.Mark("player_progress", renderLayeredProgress(barWidth, playPct, bufPct, colorAccent, colorBuffer))
 	}
-
-	pb := m.progress
-	pb.Width = barWidth
-	bar := m.zone.Mark("player_progress", pb.ViewAs(pct))
 	progressLine := lipgloss.JoinHorizontal(lipgloss.Center,
 		leftTime,
 		" ",
@@ -182,7 +193,7 @@ func (m Model) generatePlayerBar(width int) string {
 	hints := lipgloss.NewStyle().
 		Foreground(colorSubtext).
 		Background(colorBg).
-		Render("f stage  ·  -/= vol  ·  m mute  ·  ]/[ rail  ·  \\ hide")
+		Render("f stage  ·  a View Album  ·  -/= vol  ·  m mute  ·  ]/[ rail")
 	hintsPad := width - lipgloss.Width(hints)
 	if hintsPad < 0 {
 		hintsPad = 0
@@ -336,6 +347,104 @@ func formatClock(seconds float64) string {
 		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+// audioPending is true when a track is selected but mpv has not loaded it yet
+// (session restore / between extracts).
+func (m Model) audioPending() bool {
+	return m.currentTrack != nil && !m.audioLoaded
+}
+
+// audioLoading is true while we are actively resolving/loading audio.
+func (m Model) audioLoading() bool {
+	return m.audioPending() && m.isPlaying
+}
+
+func loadingSpinnerFrame() string {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	i := int(time.Now().UnixMilli()/90) % len(frames)
+	return frames[i]
+}
+
+func (m Model) progressPercents(pos, dur float64) (playPct, bufPct float64) {
+	if dur > 0 {
+		playPct = pos / dur
+		bufPct = m.playBuffered / dur
+	}
+	playPct = clamp01(playPct)
+	bufPct = clamp01(bufPct)
+	if bufPct < playPct {
+		bufPct = playPct
+	}
+	return playPct, bufPct
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+// loadingBufferPct oscillates a fake buffer fill while the stream URL resolves.
+func loadingBufferPct() float64 {
+	// 0→~0.85→0 triangle so the buffer overlay reads as "loading media".
+	cycle := int(time.Now().UnixMilli()/40) % 160
+	if cycle > 80 {
+		cycle = 160 - cycle
+	}
+	return float64(cycle) / 80.0 * 0.85
+}
+
+// renderLayeredProgress draws background + buffer overlay + playhead overlay.
+// Columns: play (accent) > buffer (gray) > empty (divider).
+func renderLayeredProgress(width int, playPct, bufPct float64, playColor, bufColor lipgloss.Color) string {
+	if width < 8 {
+		width = 8
+	}
+	playPct = clamp01(playPct)
+	bufPct = clamp01(bufPct)
+	if bufPct < playPct {
+		bufPct = playPct
+	}
+
+	playN := int(playPct * float64(width))
+	bufN := int(bufPct * float64(width))
+	if playPct > 0 && playN < 1 {
+		playN = 1
+	}
+	if bufPct > 0 && bufN < 1 {
+		bufN = 1
+	}
+	if playN > width {
+		playN = width
+	}
+	if bufN > width {
+		bufN = width
+	}
+	if bufN < playN {
+		bufN = playN
+	}
+
+	play := lipgloss.NewStyle().Foreground(playColor).Background(colorBg)
+	buf := lipgloss.NewStyle().Foreground(bufColor).Background(colorBg)
+	empty := lipgloss.NewStyle().Foreground(colorDivider).Background(colorBg)
+
+	var b strings.Builder
+	for i := 0; i < width; i++ {
+		switch {
+		case i < playN:
+			b.WriteString(play.Render("━"))
+		case i < bufN:
+			b.WriteString(buf.Render("━"))
+		default:
+			b.WriteString(empty.Render("─"))
+		}
+	}
+	return b.String()
 }
 
 // effectiveDuration prefers live mpv duration, then restored session, then track label.
