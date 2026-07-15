@@ -14,130 +14,195 @@ func (m Model) generateArtistContent(mainWidth int) string {
 	a := m.artistPage
 	var sb strings.Builder
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(a.Name)
+	// 1. Artist Image + Centered Banner
+	art := artPlaceholder()
+	if len(a.Thumbnails) > 0 {
+		// Use the largest thumbnail for banner
+		art = m.cachedArtAt(a.Thumbnails[len(a.Thumbnails)-1].URL, artWidth, artHeight)
+	}
+	
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorText)
+	title := titleStyle.Render(a.Name)
+	
 	metaParts := []string{}
 	if a.Subscribers != "" {
 		sub := ytmapi.FormatCount(a.Subscribers)
-		if sub == "" {
-			sub = a.Subscribers
-		}
+		if sub == "" { sub = a.Subscribers }
 		metaParts = append(metaParts, sub+" subscribers")
 	}
 	if a.MonthlyListeners != "" {
 		ml := ytmapi.FormatCount(a.MonthlyListeners)
-		if ml == "" {
-			ml = a.MonthlyListeners
-		}
+		if ml == "" { ml = a.MonthlyListeners }
 		metaParts = append(metaParts, ml+" monthly listeners")
 	}
-	meta := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(metaParts, "  ·  "))
+	metaStyle := lipgloss.NewStyle().Foreground(colorSubtext)
+	meta := metaStyle.Render(strings.Join(metaParts, "  ·  "))
 
-	sb.WriteString(title)
-	sb.WriteString("\n")
-	sb.WriteString(meta)
+	bannerText := lipgloss.JoinVertical(lipgloss.Left, title, meta)
+	
+	// Join art and text
+	banner := lipgloss.JoinHorizontal(lipgloss.Center, art, "   ", bannerText)
+	sb.WriteString(lipgloss.NewStyle().Width(mainWidth).Align(lipgloss.Center).Render(banner))
 	sb.WriteString("\n\n")
 
 	if a.Description != "" {
 		desc := a.Description
-		if len(desc) > 280 {
-			desc = desc[:277] + "..."
-		}
-		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Width(mainWidth - 4).Render(desc))
-		sb.WriteString("\n\n")
+		if len(desc) > 280 { desc = desc[:277] + "..." }
+		descStyle := lipgloss.NewStyle().Foreground(colorSubtext).Align(lipgloss.Center).Width(mainWidth)
+		sb.WriteString(descStyle.Render(desc) + "\n\n")
 	}
 
-	writeSection := func(label string, results []map[string]any, kind string) {
-		if len(results) == 0 {
-			return
+	// Helper to extract thumbnail URL from item
+	getThumb := func(item map[string]any) string {
+		if tList, ok := item["thumbnails"].([]any); ok && len(tList) > 0 {
+			if t, ok := tList[0].(map[string]any); ok {
+				if url, ok := t["url"].(string); ok {
+					return url
+				}
+			}
 		}
-		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(label))
-		sb.WriteString("\n\n")
-		for i, item := range results {
-			if i >= 12 {
-				break
-			}
-			rowTitle := mapStr(item, "title")
-			if rowTitle == "" {
-				rowTitle = mapStr(item, "artist")
-			}
-			sub := ""
-			switch kind {
-			case "song":
-				sub = artistRefName(item["album"])
+		return ""
+	}
+
+	// 2. Top Songs (2-col full grid with images)
+	if a.Songs != nil && len(a.Songs.Results) > 0 {
+		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Top Songs") + "\n\n")
+		colWidth := (mainWidth - 4) / 2
+		
+		var rows []string
+		for i := 0; i < len(a.Songs.Results); i += 2 {
+			var cols []string
+			for j := 0; j < 2; j++ {
+				if i+j >= len(a.Songs.Results) || i+j >= 10 { // limit to 10
+					break
+				}
+				item := a.Songs.Results[i+j]
+				rowTitle := mapStr(item, "title")
+				sub := artistRefName(item["album"])
 				if v := ytmapi.FormatCount(mapStr(item, "views")); v != "" {
-					if sub != "" {
-						sub = sub + " · " + v
-					} else {
-						sub = v
-					}
+					if sub != "" { sub = sub + " · " + v } else { sub = v }
 				}
-				if sub == "" {
-					sub = "Song"
+				if sub == "" { sub = "Song" }
+
+				// Truncate to fit column minus image width (approx 8 chars for art + padding)
+				textWidth := colWidth - 12
+				if textWidth < 10 {
+					textWidth = 10
 				}
+				if len(rowTitle) > textWidth { rowTitle = rowTitle[:textWidth-3] + "..." }
+				if len(sub) > textWidth { sub = sub[:textWidth-3] + "..." }
+
+				zoneID := artistItemZone("song", item)
+				focused := m.focusedArtistZone(zoneID)
+				bg := colorBg
+				titleColor := colorText
+				if focused {
+					bg = colorFocusBg
+					titleColor = colorAccent
+				}
+
+				songArt := artPlaceholder()
+				if url := getThumb(item); url != "" {
+					songArt = m.cachedArtAt(url, artWidth, artHeight)
+				}
+
+				textCol := lipgloss.JoinVertical(lipgloss.Left,
+					lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(textWidth).Render(rowTitle),
+					lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(textWidth).Render(sub),
+				)
+				
+				cell := lipgloss.JoinHorizontal(lipgloss.Top, songArt, "  ", textCol)
+				cell = lipgloss.NewStyle().Background(bg).Width(colWidth).Render(cell)
+				if zoneID != "" {
+					cell = m.zone.Mark(zoneID, cell)
+				}
+				cols = append(cols, cell)
+			}
+			if len(cols) == 1 {
+				rows = append(rows, cols[0])
+			} else if len(cols) == 2 {
+				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cols[0], "    ", cols[1]))
+			}
+		}
+		sb.WriteString(strings.Join(rows, "\n\n") + "\n\n")
+	}
+
+	// 3. Carousels for Albums, Singles, Fans Also Like
+	renderArtistCarousel := func(title string, items []map[string]any, kind string) {
+		if len(items) == 0 { return }
+		contentWidth := mainWidth - 2
+		cardWidth := 28
+
+		titleStr := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
+		
+		// For now, no active scrolling buttons for artist page carousels to keep it simple,
+		// just show as many as fit in the width.
+		sb.WriteString(titleStr + "\n\n")
+
+		maxVisible := (contentWidth / cardWidth)
+		if maxVisible < 1 { maxVisible = 1 }
+		visibleItems := items
+		if len(visibleItems) > maxVisible {
+			visibleItems = visibleItems[:maxVisible]
+		}
+
+		var blocks []string
+		for _, item := range visibleItems {
+			t := mapStr(item, "title")
+			if t == "" { t = mapStr(item, "artist") }
+			if len(t) > 20 { t = t[:17] + "..." }
+
+			s := ""
+			switch kind {
 			case "album":
-				sub = mapStr(item, "year")
-				t := mapStr(item, "type")
-				if t != "" {
-					if sub != "" {
-						sub = t + " · " + sub
-					} else {
-						sub = t
-					}
-				}
-			case "video":
-				sub = ytmapi.FormatCount(mapStr(item, "views"))
-				if sub == "" {
-					sub = "Video"
-				} else {
-					sub += " plays"
+				s = mapStr(item, "year")
+				if typ := mapStr(item, "type"); typ != "" {
+					if s != "" { s = typ + " · " + s } else { s = typ }
 				}
 			case "related":
-				sub = mapStr(item, "subscribers")
-				if sub == "" {
-					sub = "Artist"
-				}
+				s = mapStr(item, "subscribers")
+				if s == "" { s = "Artist" }
+			}
+			if len(s) > 22 { s = s[:19] + "..." }
+
+			art := artPlaceholder()
+			if url := getThumb(item); url != "" {
+				art = m.cachedArtAt(url, artWidth, artHeight)
 			}
 
 			zoneID := artistItemZone(kind, item)
 			focused := m.focusedArtistZone(zoneID)
 			bg := colorBg
 			titleColor := colorText
-			prefix := "  "
 			if focused {
 				bg = colorFocusBg
 				titleColor = colorAccent
-				prefix = "› "
 			}
 
-			line := lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(mainWidth/2).Render(prefix+rowTitle),
-				lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(sub),
+			content := lipgloss.JoinVertical(lipgloss.Left,
+				art, "",
+				lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(t),
+				lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s),
 			)
-			line = lipgloss.NewStyle().Background(bg).Width(mainWidth - 4).Render(line)
 
+			content = lipgloss.NewStyle().Background(bg).Width(cardWidth - 2).Render(content)
 			if zoneID != "" {
-				line = m.zone.Mark(zoneID, line)
+				content = m.zone.Mark(zoneID, content)
 			}
-			sb.WriteString(line)
-			sb.WriteString("\n")
+			blocks = append(blocks, content)
 		}
-		sb.WriteString("\n")
+		
+		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...) + "\n\n")
 	}
 
-	if a.Songs != nil {
-		writeSection("Songs", a.Songs.Results, "song")
-	}
 	if a.Albums != nil {
-		writeSection("Albums", a.Albums.Results, "album")
+		renderArtistCarousel("Albums", a.Albums.Results, "album")
 	}
 	if a.Singles != nil {
-		writeSection("Singles & EPs", a.Singles.Results, "album")
-	}
-	if a.Videos != nil {
-		writeSection("Videos", a.Videos.Results, "video")
+		renderArtistCarousel("Singles & EPs", a.Singles.Results, "album")
 	}
 	if a.Related != nil {
-		writeSection("Fans also like", a.Related.Results, "related")
+		renderArtistCarousel("Fans Also Like", a.Related.Results, "related")
 	}
 
 	return sb.String()

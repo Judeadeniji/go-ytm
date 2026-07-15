@@ -165,7 +165,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 	return Model{
 		activePane:     PaneMain,
 		activeCarousel: 0,
-		menuItems:      []string{"Home", "Explore", "Library", "Upgrade"},
+		menuItems:      []string{"Home", "Explore", "Library", "Settings"},
 		activeMenu:     "Home",
 		playlists: [][2]string{
 			{"Liked Music", "📌 Auto playlist"},
@@ -238,10 +238,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.searchInput.Blur()
 				return m, nil
-			case "up", "k":
+			case "up":
 				m = m.moveSuggestionFocus(-1)
 				return m, nil
-			case "down", "j":
+			case "down":
 				m = m.moveSuggestionFocus(1)
 				return m, nil
 			}
@@ -916,7 +916,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, cmd)
 				}
 			}
-			// Live timing on Details and NP rail — throttle to once per displayed second.
+			// Focus switching on Details and NP rail — throttle to once per displayed second.
 			pos := m.playPos
 			if m.scrubbing {
 				pos = m.scrubPos
@@ -1246,6 +1246,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if mm, cmd, handled := m.handleRailPanelClick(mouseMsg); handled {
 				return mm, cmd
+			}
+
+			if m.activeMenu == "Settings" && !m.nowPlayingOpen {
+				if m.zone.Get("settings_normalize").InBounds(mouseMsg) {
+					return m.toggleNormalize()
+				}
+				if m.zone.Get("settings_silence").InBounds(mouseMsg) {
+					return m.toggleSilenceSkip()
+				}
+				if m.zone.Get("settings_tempo").InBounds(mouseMsg) {
+					mm, cmd := m.resetTempo()
+					return mm, cmd
+				}
+				if m.zone.Get("settings_pitch").InBounds(mouseMsg) {
+					mm, cmd := m.resetPitch()
+					return mm, cmd
+				}
+				if m.zone.Get("settings_eq").InBounds(mouseMsg) {
+					return m.cycleEQPreset()
+				}
+				if m.zone.Get("settings_crossfade").InBounds(mouseMsg) {
+					return m.toggleCrossfade()
+				}
+				if m.zone.Get("settings_repeat").InBounds(mouseMsg) {
+					return m.cycleRepeatMode()
+				}
+				if m.zone.Get("settings_shuffle").InBounds(mouseMsg) {
+					return m.toggleShuffle()
+				}
 			}
 
 			// Queue panel track jumps

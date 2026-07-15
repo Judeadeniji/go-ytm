@@ -23,8 +23,8 @@ func (m Model) generateSidebarContent(leftWidth int) string {
 		if item == "Library" {
 			icon = "\ue39d" // md_library_music
 		}
-		if item == "Upgrade" {
-			icon = "\ue229" // fa_youtube_play
+		if item == "Settings" {
+			icon = "\uf013" // fa_gear
 		}
 
 		focused := m.focusedMenuItem(i)
