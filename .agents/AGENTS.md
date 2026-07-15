@@ -58,14 +58,23 @@ If an agent is asked to "port the ytm-api to Go for consistency," push back and 
 
 ## Build order (for new work / new agents picking this up)
 
-1. mpv IPC wrapper + basic playback
-2. Search (kkdai/youtube) + bubbletea shell
-3. Local playlists/queue/download cache — no account needed
-4. mpv filter config: EQ, normalization, tempo/pitch, silence-skip
-5. Lyrics via LRCLIB
-6. Python ytm-api: login, library sync, quick picks
+1. ~~mpv IPC wrapper + basic playback~~
+2. ~~Search (kkdai/youtube) + bubbletea shell~~
+3. ~~Local queue/session restore~~ (download cache still open)
+4. mpv filter config: ~~normalization~~, ~~sleep timer~~, EQ, tempo/pitch, silence-skip
+5. ~~Lyrics via LRCLIB~~ (synced + plain)
+6. Python ytm-api: **login, library sync, quick picks** ← next major vertical
+7. True crossfade (mpv playlist `loadfile append` + gapless handoff; builds on stream URL preload)
+8. Offline download cache + local playback
+9. Playlist import/reorder, tempo/EQ UI polish
 
 Later steps depend on earlier ones being stable. Don't start the ytm-api work before steps 1–3 are solid — it's the highest-risk, most-likely-to-break piece and easiest to build/debug last.
+
+### Near-term playback polish (can interleave with 6)
+
+- ~~Stream URL + art preload~~ (warm next 1–2 queue items)
+- ~~True crossfade~~ — optional (`Crossfade` off by default) + configurable duration (`CrossfadeSec`); gapless mpv append + volume dip; Settings page will bind the same prefs later
+- Silence-skip / rubberband tempo if listening polish continues before account work
 
 ## Known fragility (don't be surprised by this)
 
