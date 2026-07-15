@@ -18,11 +18,11 @@ func TestSetFromStartsAtIndex(t *testing.T) {
 	if !ok || cur.VideoID != "c" {
 		t.Fatalf("current=%v ok=%v", cur, ok)
 	}
-	next, ok := q.Next()
+	next, ok := q.Next(false, false)
 	if !ok || next.VideoID != "d" {
 		t.Fatalf("next=%v ok=%v", next, ok)
 	}
-	if _, ok := q.Next(); ok {
+	if _, ok := q.Next(false, false); ok {
 		t.Fatal("expected end of queue")
 	}
 }
@@ -44,7 +44,7 @@ func TestCapHistory(t *testing.T) {
 	}
 	q.SetFrom(tracks, 0)
 	for i := 0; i < 7; i++ {
-		q.Next()
+		q.Next(false, false)
 	}
 	q.CapHistory(3)
 	if q.CurrentIndex() != 3 {

@@ -155,7 +155,16 @@ func (m *Model) ensureUpcomingPreloaded() tea.Cmd {
 
 	var cmds []tea.Cmd
 	for i := 1; i <= ahead; i++ {
-		t, ok := m.queue.At(cur + i)
+		var t Track
+		var ok bool
+		if i == 1 {
+			t, ok = m.queue.PeekNext(m.shuffle, m.repeatMode == 1)
+		} else {
+			if m.shuffle {
+				break // Cannot reliably peek multiple random tracks ahead
+			}
+			t, ok = m.queue.At(cur + i)
+		}
 		if !ok || t.VideoID == "" {
 			break
 		}

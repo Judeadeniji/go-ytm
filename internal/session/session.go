@@ -46,6 +46,8 @@ type Snapshot struct {
 	Tempo            float64   `json:"tempo"`
 	Pitch            float64   `json:"pitch"`
 	EQPreset         int       `json:"eqPreset"`
+	RepeatMode       int       `json:"repeatMode"` // 0=Off, 1=All, 2=One
+	Shuffle          bool      `json:"shuffle"`
 	Crossfade        bool      `json:"crossfade"`
 	CrossfadeSec     int       `json:"crossfadeSec"`
 	WasPlaying       bool      `json:"wasPlaying"`

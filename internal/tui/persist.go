@@ -80,6 +80,8 @@ func (m Model) snapshot() session.Snapshot {
 		Tempo:            m.tempo,
 		Pitch:            m.pitch,
 		EQPreset:         m.eqPreset,
+		RepeatMode:       m.repeatMode,
+		Shuffle:          m.shuffle,
 		Crossfade:        m.crossfade,
 		CrossfadeSec:     session.ClampCrossfadeSec(m.crossfadeSec),
 		WasPlaying:       false, // always restore paused; ignore prior play flag
@@ -189,6 +191,8 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	if m.eqPreset < 0 || m.eqPreset >= len(eqPresets) {
 		m.eqPreset = 0
 	}
+	m.repeatMode = snap.RepeatMode
+	m.shuffle = snap.Shuffle
 	m.crossfade = snap.Crossfade
 	m.crossfadeSec = session.ClampCrossfadeSec(snap.CrossfadeSec)
 	if m.crossfadeSec == 0 {

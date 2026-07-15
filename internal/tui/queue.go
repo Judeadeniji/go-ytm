@@ -1,5 +1,9 @@
 package tui
 
+import (
+	"math/rand"
+)
+
 // Track represents a playable audio track.
 type Track struct {
 	VideoID        string
@@ -16,27 +20,32 @@ type Track struct {
 // Queue manages an ordered list of tracks with a current-position pointer.
 // current == -1 means nothing is queued / nothing is playing.
 type Queue struct {
-	tracks  []Track
-	current int
+	tracks      []Track
+	current     int
+	shuffleNext int // stores the deterministic next track for shuffle, -1 if unset
+}
+
+func (q *Queue) invalidateShuffle() {
+	q.shuffleNext = -1
 }
 
 // Add appends a track to the end of the queue.
 func (q *Queue) Add(t Track) {
 	q.tracks = append(q.tracks, t)
+	q.invalidateShuffle()
 }
 
-// AddNext inserts a track immediately after the current position.
-// If the queue is empty, the track becomes the first element.
+// AddNext inserts a track immediately after the current one.
 func (q *Queue) AddNext(t Track) {
-	if len(q.tracks) == 0 || q.current < 0 {
-		q.tracks = append([]Track{t}, q.tracks...)
+	if q.current < 0 || q.current >= len(q.tracks)-1 {
+		q.Add(t)
 		return
 	}
-	insertAt := q.current + 1
-	q.tracks = append(q.tracks[:insertAt], append([]Track{t}, q.tracks[insertAt:]...)...)
+	q.tracks = append(q.tracks[:q.current+1], append([]Track{t}, q.tracks[q.current+1:]...)...)
+	q.invalidateShuffle()
 }
 
-// Current returns the track at the current position and whether one exists.
+// Current returns the currently playing track.
 func (q *Queue) Current() (Track, bool) {
 	if q.current < 0 || q.current >= len(q.tracks) {
 		return Track{}, false
@@ -44,14 +53,54 @@ func (q *Queue) Current() (Track, bool) {
 	return q.tracks[q.current], true
 }
 
-// Next advances the position by one and returns the new current track.
-// Returns (Track{}, false) if already at the end.
-func (q *Queue) Next() (Track, bool) {
-	if q.current+1 >= len(q.tracks) {
+// PeekNext returns the logical next track without advancing the queue.
+func (q *Queue) PeekNext(shuffle, repeatAll bool) (Track, bool) {
+	if len(q.tracks) == 0 {
 		return Track{}, false
 	}
-	q.current++
-	return q.tracks[q.current], true
+	
+	if shuffle {
+		if q.shuffleNext == -1 {
+			if len(q.tracks) == 1 {
+				q.shuffleNext = 0
+			} else {
+				nextIdx := rand.Intn(len(q.tracks))
+				if nextIdx == q.current {
+					nextIdx = (nextIdx + 1) % len(q.tracks)
+				}
+				q.shuffleNext = nextIdx
+			}
+		}
+		return q.tracks[q.shuffleNext], true
+	}
+
+	if q.current+1 >= len(q.tracks) {
+		if repeatAll {
+			return q.tracks[0], true
+		}
+		return Track{}, false
+	}
+	return q.tracks[q.current+1], true
+}
+
+// Next advances the position and returns the new current track.
+// If shuffle is true, it picks a random track.
+// If repeatAll is true and at the end, it wraps to the beginning.
+func (q *Queue) Next(shuffle, repeatAll bool) (Track, bool) {
+	t, ok := q.PeekNext(shuffle, repeatAll)
+	if !ok {
+		return Track{}, false
+	}
+	if shuffle {
+		q.current = q.shuffleNext
+		q.shuffleNext = -1
+	} else {
+		q.current++
+		if q.current >= len(q.tracks) {
+			q.current = 0 // Wrapped around due to repeatAll
+		}
+	}
+	return t, true
 }
 
 // Prev moves the position back by one and returns the new current track.
@@ -81,12 +130,14 @@ func (q *Queue) AppendAndSelect(t Track) {
 
 // SetPlaying replaces the queue with a single track as current.
 func (q *Queue) SetPlaying(t Track) {
+	q.invalidateShuffle()
 	q.tracks = []Track{t}
 	q.current = 0
 }
 
 // SetFrom replaces the queue with tracks[start:] and selects the first of that slice.
 func (q *Queue) SetFrom(tracks []Track, start int) {
+	q.invalidateShuffle()
 	if start < 0 {
 		start = 0
 	}
@@ -121,6 +172,7 @@ func (q *Queue) CapHistory(maxPlayed int) {
 
 // Clear empties the queue and resets the position.
 func (q *Queue) Clear() {
+	q.invalidateShuffle()
 	q.tracks = nil
 	q.current = -1
 }

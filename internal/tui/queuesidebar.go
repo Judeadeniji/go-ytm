@@ -324,6 +324,17 @@ func (m Model) renderRailDetails(inner int) string {
 	sb.WriteString(m.renderMetaRow(inner, "EQ", eqPresets[m.eqPreset].Name))
 	sb.WriteString(m.zone.Mark("rail_meta_eq", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("E cycle"))))
 	sb.WriteString("\n")
+	repeatLabels := []string{"Off", "All", "One"}
+	sb.WriteString(m.renderMetaRow(inner, "Repeat", repeatLabels[m.repeatMode]))
+	sb.WriteString(m.zone.Mark("rail_meta_repeat", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("R cycle"))))
+	sb.WriteString("\n")
+	shuffleLabel := "Off"
+	if m.shuffle {
+		shuffleLabel = "On"
+	}
+	sb.WriteString(m.renderMetaRow(inner, "Shuffle", shuffleLabel))
+	sb.WriteString(m.zone.Mark("rail_meta_shuffle", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("S toggle"))))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMetaRow(inner, "Crossfade", m.crossfadeSecLabel()))
 	sb.WriteString(m.zone.Mark("rail_meta_crossfade", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("x on/off · X duration"))))
 	sb.WriteString("\n")
@@ -639,6 +650,14 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	}
 	if m.zone.Get("rail_meta_eq").InBounds(msg) {
 		mm, cmd := m.cycleEQPreset()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_repeat").InBounds(msg) {
+		mm, cmd := m.cycleRepeatMode()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_shuffle").InBounds(msg) {
+		mm, cmd := m.toggleShuffle()
 		return mm, cmd, true
 	}
 	if m.zone.Get("rail_meta_crossfade").InBounds(msg) {

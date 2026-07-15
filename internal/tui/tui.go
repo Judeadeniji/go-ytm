@@ -95,6 +95,8 @@ type Model struct {
 	tempo            float64   // speed multiplier
 	pitch            float64   // pitch shift in semitones
 	eqPreset         int       // index into eqPresets
+	repeatMode       int       // 0=Off, 1=All, 2=One
+	shuffle          bool      // shuffle state
 	sleepUntil       time.Time // zero = sleep timer off
 	sleepMinutes     int       // last set duration in the cycle (0/15/30/45/60)
 	crossfade        bool      // gapless append + volume dip (off by default)
@@ -443,6 +445,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.adjustPitch(0.5)
 		case "E":
 			return m.cycleEQPreset()
+		case "R":
+			return m.cycleRepeatMode()
+		case "S":
+			return m.toggleShuffle()
 		case ",":
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -827,7 +833,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.clearCrossfadeArmState()
-		mm, cmd := m.playNext()
+		mm, cmd := m.playNextWithManual(false)
 		if cmd == nil {
 			// End of queue
 			mm.isPlaying = false
@@ -1314,9 +1320,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) cycleRepeatMode() (Model, tea.Cmd) {
+	m.repeatMode = (m.repeatMode + 1) % 3
+	m.markSessionDirty()
+	labels := []string{"Off", "All", "One"}
+	m.statusMsg = "Repeat: " + labels[m.repeatMode]
+	m.setQueuePanelContent()
+	return m, nil
+}
+
+func (m Model) toggleShuffle() (Model, tea.Cmd) {
+	m.shuffle = !m.shuffle
+	m.markSessionDirty()
+	if m.shuffle {
+		m.statusMsg = "Shuffle: On"
+	} else {
+		m.statusMsg = "Shuffle: Off"
+	}
+	m.setQueuePanelContent()
+	return m, nil
+}
+
 // playNext advances the queue and starts the next track.
 func (m Model) playNext() (Model, tea.Cmd) {
-	t, ok := m.queue.Next()
+	return m.playNextWithManual(true)
+}
+
+func (m Model) playNextWithManual(manual bool) (Model, tea.Cmd) {
+	if !manual && m.repeatMode == 2 && m.queue.CurrentIndex() >= 0 { // RepeatOne
+		return m.playQueueIndex(m.queue.CurrentIndex())
+	}
+
+	t, ok := m.queue.Next(m.shuffle, m.repeatMode == 1) // true if RepeatAll
 	if !ok {
 		m.statusMsg = "End of queue"
 		m.isPlaying = false

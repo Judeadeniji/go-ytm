@@ -156,7 +156,7 @@ func (m *Model) ensureUpcomingArmed() tea.Cmd {
 	if cur < 0 {
 		return nil
 	}
-	next, ok := m.queue.At(cur + 1)
+	next, ok := m.queue.PeekNext(m.shuffle, m.repeatMode == 1)
 	if !ok || next.VideoID == "" {
 		return nil
 	}
@@ -225,7 +225,7 @@ func (m *Model) applyCrossfadeVolume() tea.Cmd {
 func (m Model) promoteArmedTrack() (Model, tea.Cmd) {
 	armed := m.armedVideoID
 	m.clearCrossfadeArmState()
-	t, ok := m.queue.Next()
+	t, ok := m.queue.Next(m.shuffle, m.repeatMode == 1)
 	if !ok || t.VideoID == "" || (armed != "" && t.VideoID != armed) {
 		// Mismatch — fall back to full reload if we somehow advanced wrong.
 		if ok {
