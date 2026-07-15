@@ -174,6 +174,40 @@ def watch(
     return result
 
 
+@app.get("/song/{video_id}")
+def song(video_id: str):
+    """
+    Song / video metadata via get_song(videoId).
+    Returns a flattened subset of videoDetails + microformat (not streaming URLs).
+    """
+    try:
+        result = ytmusic.get_song(video_id)
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+
+    vd = result.get("videoDetails") or {}
+    mf = (result.get("microformat") or {}).get("microformatDataRenderer") or {}
+    thumbs = (vd.get("thumbnail") or {}).get("thumbnails") or []
+    if not thumbs:
+        thumbs = (mf.get("thumbnail") or {}).get("thumbnails") or []
+
+    return {
+        "videoId": vd.get("videoId") or video_id,
+        "title": vd.get("title") or "",
+        "author": vd.get("author") or "",
+        "channelId": vd.get("channelId") or "",
+        "lengthSeconds": vd.get("lengthSeconds") or "",
+        "viewCount": vd.get("viewCount") or "",
+        "musicVideoType": vd.get("musicVideoType") or "",
+        "isLiveContent": bool(vd.get("isLiveContent")),
+        "thumbnails": thumbs,
+        "description": mf.get("description") or "",
+        "publishDate": mf.get("publishDate") or mf.get("uploadDate") or "",
+        "category": mf.get("category") or "",
+        "urlCanonical": mf.get("urlCanonical") or "",
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 

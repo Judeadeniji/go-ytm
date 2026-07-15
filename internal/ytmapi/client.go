@@ -183,6 +183,17 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string, limit int) 
 	return &data, nil
 }
 
+func (c *Client) GetSong(ctx context.Context, videoID string) (*SongDetails, error) {
+	if videoID == "" {
+		return nil, fmt.Errorf("videoId required")
+	}
+	var data SongDetails
+	if err := c.getJSON(ctx, "/song/"+url.PathEscape(videoID), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
 func (c *Client) GetWatchPlaylist(ctx context.Context, videoID, playlistID string, radio bool, limit int) (*WatchPlaylist, error) {
 	if limit <= 0 {
 		limit = 25
@@ -241,6 +252,31 @@ func AuthorName(author any) string {
 		if name, ok := v["name"].(string); ok {
 			return name
 		}
+	}
+	return ""
+}
+
+// AlbumRef unwraps TrackItem.Album as name + optional browse id.
+func AlbumRef(album any) (name, id string) {
+	switch v := album.(type) {
+	case string:
+		return v, ""
+	case map[string]any:
+		if n, ok := v["name"].(string); ok {
+			name = n
+		}
+		if i, ok := v["id"].(string); ok {
+			id = i
+		}
+		return name, id
+	}
+	return "", ""
+}
+
+// ArtistChannelID returns the first artist browse/channel id when present.
+func (t TrackItem) ArtistChannelID() string {
+	if len(t.Artists) > 0 {
+		return t.Artists[0].ID
 	}
 	return ""
 }

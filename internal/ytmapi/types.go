@@ -157,3 +157,20 @@ type WatchPlaylist struct {
 	Lyrics     string      `json:"lyrics,omitempty"`
 	Related    string      `json:"related,omitempty"`
 }
+
+// SongDetails is a flattened get_song metadata payload (no streaming URLs).
+type SongDetails struct {
+	VideoID        string      `json:"videoId"`
+	Title          string      `json:"title"`
+	Author         string      `json:"author,omitempty"`
+	ChannelID      string      `json:"channelId,omitempty"`
+	LengthSeconds  string      `json:"lengthSeconds,omitempty"`
+	ViewCount      string      `json:"viewCount,omitempty"`
+	MusicVideoType string      `json:"musicVideoType,omitempty"`
+	IsLiveContent  bool        `json:"isLiveContent,omitempty"`
+	Thumbnails     []Thumbnail `json:"thumbnails,omitempty"`
+	Description    string      `json:"description,omitempty"`
+	PublishDate    string      `json:"publishDate,omitempty"`
+	Category       string      `json:"category,omitempty"`
+	URLCanonical   string      `json:"urlCanonical,omitempty"`
+}
