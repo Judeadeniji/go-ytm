@@ -2,9 +2,22 @@ from fastapi import FastAPI, HTTPException, Query
 from requests import RequestException
 from ytmusicapi import YTMusic
 from ytmusicapi.exceptions import YTMusicError, YTMusicUserError
+from ytmusicapi.setup import setup
+from pydantic import BaseModel
+import os
 
 app = FastAPI()
-ytmusic = YTMusic()
+AUTH_FILE = os.path.expanduser("~/.local/state/go-ytm/headers_auth.json")
+
+def load_ytmusic():
+    if os.path.exists(AUTH_FILE):
+        try:
+            return YTMusic(AUTH_FILE)
+        except Exception:
+            return YTMusic()
+    return YTMusic()
+
+ytmusic = load_ytmusic()
 
 
 def _ytm_error(exc: Exception) -> HTTPException:
@@ -29,7 +42,104 @@ def _normalize_playlist_id(playlist_id: str) -> str:
 @app.get("/health")
 def health():
     """Liveness check used by the make run bootstrap."""
-    return {"ok": True}
+    return {"ok": True, "authenticated": os.path.exists(AUTH_FILE)}
+
+class AuthRequest(BaseModel):
+    headers_raw: str
+
+@app.post("/auth/setup")
+def auth_setup(req: AuthRequest):
+    try:
+        os.makedirs(os.path.dirname(AUTH_FILE), exist_ok=True)
+        setup(filepath=AUTH_FILE, headers_raw=req.headers_raw)
+        global ytmusic
+        ytmusic = load_ytmusic()
+        return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+from ytmusicapi.auth.oauth import OAuthCredentials, RefreshingToken
+
+class OAuthCodeRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+@app.post("/auth/oauth/code")
+def oauth_code(req: OAuthCodeRequest):
+    cred = OAuthCredentials(req.client_id, req.client_secret)
+    try:
+        code = cred.get_code()
+        return code
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+class OAuthTokenRequest(BaseModel):
+    client_id: str
+    client_secret: str
+    device_code: str
+
+@app.post("/auth/oauth/token")
+def oauth_token(req: OAuthTokenRequest):
+    cred = OAuthCredentials(req.client_id, req.client_secret)
+    try:
+        raw_token = cred.token_from_code(req.device_code)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    
+    if "error" in raw_token:
+        err = raw_token.get("error")
+        if err == "authorization_pending":
+            return {"status": "pending"}
+        raise HTTPException(status_code=400, detail=err)
+
+    refresh_token_expires_in = raw_token.get("refresh_token_expires_in", raw_token.get("expires_in", 0))
+    ref_token = RefreshingToken(
+        credentials=cred,
+        access_token=raw_token["access_token"],
+        refresh_token=raw_token["refresh_token"],
+        scope=raw_token["scope"],
+        token_type=raw_token["token_type"],
+        expires_in=refresh_token_expires_in,
+    )
+    ref_token.update(raw_token)
+    
+    # Ensure directory exists before saving
+    os.makedirs(os.path.dirname(AUTH_FILE), exist_ok=True)
+    # _local_cache is a pathlib.Path or str ? 
+    from pathlib import Path
+    ref_token.local_cache = Path(AUTH_FILE)
+    
+    global ytmusic
+    ytmusic = load_ytmusic()
+    return {"status": "ok"}
+
+@app.get("/library/playlists")
+def library_playlists(limit: int = Query(50)):
+    try:
+        return {"playlists": ytmusic.get_library_playlists(limit=limit)}
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+
+@app.get("/library/songs")
+def library_songs(limit: int = Query(100)):
+    try:
+        return {"songs": ytmusic.get_library_songs(limit=limit)}
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+
+@app.get("/library/albums")
+def library_albums(limit: int = Query(100)):
+    try:
+        return {"albums": ytmusic.get_library_albums(limit=limit)}
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+
+@app.get("/library/artists")
+def library_artists(limit: int = Query(100)):
+    try:
+        return {"artists": ytmusic.get_library_artists(limit=limit)}
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
 
 
 @app.get("/search")

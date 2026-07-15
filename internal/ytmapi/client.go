@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -284,4 +285,153 @@ func (t TrackItem) ArtistChannelID() string {
 		return t.Artists[0].ID
 	}
 	return ""
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, body any, out any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	u := c.baseURL + path
+	
+	importBytes, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("ytm-api marshal: %w", err)
+	}
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(importBytes)))
+	if err != nil {
+		return fmt.Errorf("ytm-api request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ytm-api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIBody+1))
+	if err != nil {
+		return fmt.Errorf("ytm-api read: %w", err)
+	}
+	
+	if resp.StatusCode != http.StatusOK {
+		var errBody struct {
+			Detail string `json:"detail"`
+			Error  string `json:"error"`
+		}
+		_ = json.Unmarshal(respBody, &errBody)
+		msg := errBody.Detail
+		if msg == "" { msg = errBody.Error }
+		if msg == "" { msg = string(respBody) }
+		if len(msg) > 200 { msg = msg[:200] }
+		return fmt.Errorf("ytm-api %d: %s", resp.StatusCode, msg)
+	}
+	if out != nil {
+		if err := json.Unmarshal(respBody, out); err != nil {
+			return fmt.Errorf("ytm-api decode: %w", err)
+		}
+	}
+	return nil
+}
+
+type authRequest struct {
+	HeadersRaw string `json:"headers_raw"`
+}
+
+func (c *Client) AuthSetup(ctx context.Context, headersRaw string) error {
+	return c.postJSON(ctx, "/auth/setup", authRequest{HeadersRaw: headersRaw}, nil)
+}
+
+type libraryPlaylistsResponse struct {
+	Playlists []map[string]any `json:"playlists"`
+}
+
+func (c *Client) GetLibraryPlaylists(ctx context.Context, limit int) ([]map[string]any, error) {
+	if limit <= 0 { limit = 50 }
+	var data libraryPlaylistsResponse
+	if err := c.getJSON(ctx, fmt.Sprintf("/library/playlists?limit=%d", limit), &data); err != nil {
+		return nil, err
+	}
+	return data.Playlists, nil
+}
+
+type librarySongsResponse struct {
+	Songs []map[string]any `json:"songs"`
+}
+
+func (c *Client) GetLibrarySongs(ctx context.Context, limit int) ([]map[string]any, error) {
+	if limit <= 0 { limit = 100 }
+	var data librarySongsResponse
+	if err := c.getJSON(ctx, fmt.Sprintf("/library/songs?limit=%d", limit), &data); err != nil {
+		return nil, err
+	}
+	return data.Songs, nil
+}
+
+type libraryAlbumsResponse struct {
+	Albums []map[string]any `json:"albums"`
+}
+
+func (c *Client) GetLibraryAlbums(ctx context.Context, limit int) ([]map[string]any, error) {
+	if limit <= 0 { limit = 100 }
+	var data libraryAlbumsResponse
+	if err := c.getJSON(ctx, fmt.Sprintf("/library/albums?limit=%d", limit), &data); err != nil {
+		return nil, err
+	}
+	return data.Albums, nil
+}
+
+type libraryArtistsResponse struct {
+	Artists []map[string]any `json:"artists"`
+}
+
+func (c *Client) GetLibraryArtists(ctx context.Context, limit int) ([]map[string]any, error) {
+	if limit <= 0 { limit = 100 }
+	var data libraryArtistsResponse
+	if err := c.getJSON(ctx, fmt.Sprintf("/library/artists?limit=%d", limit), &data); err != nil {
+		return nil, err
+	}
+	return data.Artists, nil
+}
+
+type OAuthCodeRequest struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+type OAuthCodeResponse struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURL string `json:"verification_url"`
+	ExpiresIn       int    `json:"expires_in"`
+	Interval        int    `json:"interval"`
+}
+
+func (c *Client) OAuthCode(ctx context.Context, clientID, clientSecret string) (*OAuthCodeResponse, error) {
+	req := OAuthCodeRequest{ClientID: clientID, ClientSecret: clientSecret}
+	var data OAuthCodeResponse
+	if err := c.postJSON(ctx, "/auth/oauth/code", req, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+type OAuthTokenRequest struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	DeviceCode   string `json:"device_code"`
+}
+
+type OAuthTokenResponse struct {
+	Status string `json:"status"` // "pending" or "ok"
+}
+
+func (c *Client) OAuthToken(ctx context.Context, clientID, clientSecret, deviceCode string) (*OAuthTokenResponse, error) {
+	req := OAuthTokenRequest{ClientID: clientID, ClientSecret: clientSecret, DeviceCode: deviceCode}
+	var data OAuthTokenResponse
+	if err := c.postJSON(ctx, "/auth/oauth/token", req, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
 }

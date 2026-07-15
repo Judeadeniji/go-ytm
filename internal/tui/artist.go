@@ -42,13 +42,13 @@ func (m Model) generateArtistContent(mainWidth int) string {
 	
 	// Join art and text
 	banner := lipgloss.JoinHorizontal(lipgloss.Center, art, "   ", bannerText)
-	sb.WriteString(lipgloss.NewStyle().Width(mainWidth).Align(lipgloss.Center).Render(banner))
+	sb.WriteString(lipgloss.NewStyle().Width(mainWidth).Align(lipgloss.Left).Render(banner))
 	sb.WriteString("\n\n")
 
 	if a.Description != "" {
 		desc := a.Description
 		if len(desc) > 280 { desc = desc[:277] + "..." }
-		descStyle := lipgloss.NewStyle().Foreground(colorSubtext).Align(lipgloss.Center).Width(mainWidth)
+		descStyle := lipgloss.NewStyle().Foreground(colorSubtext).Align(lipgloss.Left).Width(mainWidth)
 		sb.WriteString(descStyle.Render(desc) + "\n\n")
 	}
 
@@ -101,9 +101,9 @@ func (m Model) generateArtistContent(mainWidth int) string {
 					titleColor = colorAccent
 				}
 
-				songArt := artPlaceholder()
+				songArt := sizedPlaceholder(sugArtWidth, sugArtHeight)
 				if url := getThumb(item); url != "" {
-					songArt = m.cachedArtAt(url, artWidth, artHeight)
+					songArt = m.cachedArtAt(url, sugArtWidth, sugArtHeight)
 				}
 
 				textCol := lipgloss.JoinVertical(lipgloss.Left,

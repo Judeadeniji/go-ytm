@@ -285,7 +285,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				closeSession(m.sessionStore),
 				tea.Quit,
 			)
-		case "esc":
+		case "esc", "backspace":
 			if m.nowPlayingOpen {
 				return m.closeNowPlaying(), nil
 			}
@@ -1504,7 +1504,45 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			}
 		case ScreenArtist:
 			if m.artistPage != nil {
-				queue(firstThumbURL(m.artistPage.Thumbnails), coverWidth, coverHeight)
+				a := m.artistPage
+				if len(a.Thumbnails) > 0 {
+					queue(a.Thumbnails[len(a.Thumbnails)-1].URL, artWidth, artHeight)
+				}
+				
+				getThumb := func(item map[string]any) string {
+					if tList, ok := item["thumbnails"].([]any); ok && len(tList) > 0 {
+						if t, ok := tList[0].(map[string]any); ok {
+							if url, ok := t["url"].(string); ok { return url }
+						}
+					}
+					return ""
+				}
+
+				if a.Songs != nil {
+					for i, item := range a.Songs.Results {
+						if i >= 10 { break }
+						if url := getThumb(item); url != "" {
+							queue(url, sugArtWidth, sugArtHeight)
+						}
+					}
+				}
+
+				contentWidth := mainWidth - 2
+				maxVis := contentWidth / 28
+				if maxVis < 1 { maxVis = 1 }
+
+				queueCarousel := func(items []map[string]any) {
+					for i, item := range items {
+						if i >= maxVis { break }
+						if url := getThumb(item); url != "" {
+							queue(url, artWidth, artHeight)
+						}
+					}
+				}
+
+				if a.Albums != nil { queueCarousel(a.Albums.Results) }
+				if a.Singles != nil { queueCarousel(a.Singles.Results) }
+				if a.Related != nil { queueCarousel(a.Related.Results) }
 			}
 		}
 	} else if len(m.searchResults) > 0 {
