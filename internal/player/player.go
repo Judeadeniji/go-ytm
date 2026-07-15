@@ -3,6 +3,7 @@ package player
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,6 +73,9 @@ func NewPlayer() (*Player, error) {
 		"--really-quiet",
 		// User scripts can delay or block IPC socket creation intermittently.
 		"--load-scripts=no",
+		// YouTube HTTP streams often report unseekable until demux; allow resume seeks.
+		"--force-seekable=yes",
+		"--cache=yes",
 		"--input-ipc-server="+socketPath,
 	)
 
@@ -353,14 +357,85 @@ func (p *Player) Load(url string) error {
 }
 
 // LoadAt loads url and asks mpv to start at startSec (seconds).
-// Using loadfile's start= option is more reliable than seeking immediately
-// after play on HTTP streams.
+// Options are passed as a JSON object (mpv JSON IPC), which is more reliable
+// than a "start=N" string for HTTP streams.
 func (p *Player) LoadAt(url string, startSec float64) error {
 	if startSec < 0.5 {
 		return p.Load(url)
 	}
-	opts := fmt.Sprintf("start=%.3f", startSec)
+	opts := map[string]any{"start": startSec}
 	return p.sendCommand("loadfile", url, "replace", opts)
+}
+
+// Seekable reports whether mpv currently considers the file seekable.
+func (p *Player) Seekable() (bool, error) {
+	data, err := p.getProperty("seekable")
+	if err != nil {
+		return false, err
+	}
+	var v bool
+	if err := json.Unmarshal(data, &v); err != nil {
+		return false, err
+	}
+	return v, nil
+}
+
+// SetTimePos sets the absolute playback position (seconds).
+// Useful as a fallback when seek commands are ignored by HTTP demuxers.
+func (p *Player) SetTimePos(seconds float64) error {
+	return p.sendCommand("set_property", "time-pos", seconds)
+}
+
+// SeekUntil repeatedly seeks to target until the reported position is near it
+// or the deadline / ctx fires. Waits for duration/seekable when possible.
+func (p *Player) SeekUntil(ctx context.Context, target float64, deadline time.Time) error {
+	if target < 0.5 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		dur, durErr := p.DurationSeconds()
+		seekable, _ := p.Seekable()
+		ready := seekable || (durErr == nil && dur > 1)
+		if ready {
+			if err := p.SeekAbsolute(target); err != nil {
+				lastErr = err
+				_ = p.SetTimePos(target)
+			} else {
+				lastErr = nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
+			if pos, err := p.PositionSeconds(); err == nil && pos+2.5 >= target {
+				return nil
+			}
+			// Property-set nudge if seek claimed success but position stuck early.
+			if err := p.SetTimePos(target); err != nil {
+				lastErr = err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	if pos, err := p.PositionSeconds(); err == nil && pos+2.5 >= target {
+		return nil
+	}
+	return fmt.Errorf("seek to %.1fs timed out", target)
 }
 
 // Pause pauses playback
@@ -391,4 +466,51 @@ func (p *Player) SeekRelative(seconds float64) error {
 // SeekAbsolute seeks to an absolute position in seconds.
 func (p *Player) SeekAbsolute(seconds float64) error {
 	return p.sendCommand("seek", seconds, "absolute")
+}
+
+// Volume returns the current mpv volume (typically 0–100).
+func (p *Player) Volume() (float64, error) {
+	data, err := p.getProperty("volume")
+	if err != nil {
+		return 0, err
+	}
+	var v float64
+	if err := json.Unmarshal(data, &v); err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+// SetVolume sets mpv volume, clamped to 0–100.
+func (p *Player) SetVolume(volume float64) error {
+	if volume < 0 {
+		volume = 0
+	}
+	if volume > 100 {
+		volume = 100
+	}
+	return p.sendCommand("set_property", "volume", volume)
+}
+
+// Muted reports whether mpv audio is muted.
+func (p *Player) Muted() (bool, error) {
+	data, err := p.getProperty("mute")
+	if err != nil {
+		return false, err
+	}
+	var v bool
+	if err := json.Unmarshal(data, &v); err != nil {
+		return false, err
+	}
+	return v, nil
+}
+
+// SetMute sets the mpv mute property.
+func (p *Player) SetMute(mute bool) error {
+	return p.sendCommand("set_property", "mute", mute)
+}
+
+// ToggleMute cycles the mute property.
+func (p *Player) ToggleMute() error {
+	return p.sendCommand("cycle", "mute")
 }

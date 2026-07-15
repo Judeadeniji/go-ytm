@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 4
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -184,6 +184,35 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 				return fmt.Errorf("migrate v2: %w", err)
 			}
 		}
+		ver = 2
+	}
+
+	if ver < 3 {
+		alters := []string{
+			`ALTER TABLE session ADD COLUMN volume REAL NOT NULL DEFAULT 100`,
+			`ALTER TABLE session ADD COLUMN muted INTEGER NOT NULL DEFAULT 0`,
+			`INSERT INTO schema_migrations(version) VALUES (3)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v3: %w", err)
+			}
+		}
+		ver = 3
+	}
+
+	if ver < 4 {
+		alters := []string{
+			`ALTER TABLE session ADD COLUMN play_duration REAL NOT NULL DEFAULT 0`,
+			`ALTER TABLE session ADD COLUMN was_playing INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE session ADD COLUMN now_playing_open INTEGER NOT NULL DEFAULT 0`,
+			`INSERT INTO schema_migrations(version) VALUES (4)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v4: %w", err)
+			}
+		}
 	}
 
 	return tx.Commit()
@@ -233,14 +262,19 @@ func (db *DB) LoadSession() (*session.Snapshot, error) {
 
 	var snap session.Snapshot
 	var hidden, showSearch int
+	var muted, wasPlaying, nowPlaying int
 	err := db.sql.QueryRow(`
 SELECT active_menu, queue_panel_hidden, search_filter, last_search_query,
        active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
-       play_pos, queue_index, show_search
+       play_pos, queue_index, show_search,
+       COALESCE(volume, 100), COALESCE(muted, 0),
+       COALESCE(play_duration, 0), COALESCE(was_playing, 0), COALESCE(now_playing_open, 0)
 FROM session WHERE id = 1`).Scan(
 		&snap.ActiveMenu, &hidden, &snap.SearchFilter, &snap.LastSearchQuery,
 		&snap.ActiveCarousel, &snap.HomeCardCursor, &snap.TrackCursor, &snap.ListCursor, &snap.QueueCursor,
 		&snap.PlayPos, &snap.QueueIndex, &showSearch,
+		&snap.Volume, &muted,
+		&snap.PlayDuration, &wasPlaying, &nowPlaying,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -251,6 +285,15 @@ FROM session WHERE id = 1`).Scan(
 	snap.Version = schemaVersion
 	snap.QueuePanelHidden = hidden != 0
 	snap.ShowSearch = showSearch != 0
+	snap.Muted = muted != 0
+	snap.WasPlaying = wasPlaying != 0
+	snap.NowPlayingOpen = nowPlaying != 0
+	if snap.Volume < 0 {
+		snap.Volume = 0
+	}
+	if snap.Volume > 100 {
+		snap.Volume = 100
+	}
 
 	rows, err := db.sql.Query(`
 SELECT video_id, title, artist, thumbnail_url,
@@ -307,21 +350,39 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	}
 	defer tx.Rollback()
 
-	hidden, showSearch := 0, 0
+	hidden, showSearch, muted, wasPlaying, nowPlaying := 0, 0, 0, 0, 0
 	if snap.QueuePanelHidden {
 		hidden = 1
 	}
 	if snap.ShowSearch {
 		showSearch = 1
 	}
+	if snap.Muted {
+		muted = 1
+	}
+	if snap.WasPlaying {
+		wasPlaying = 1
+	}
+	if snap.NowPlayingOpen {
+		nowPlaying = 1
+	}
+	vol := snap.Volume
+	if vol < 0 {
+		vol = 0
+	}
+	if vol > 100 {
+		vol = 100
+	}
 
 	if _, err := tx.Exec(`
 INSERT INTO session (
   id, active_menu, queue_panel_hidden, search_filter, last_search_query,
   active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
-  play_pos, queue_index, show_search, updated_at
+  play_pos, queue_index, show_search, volume, muted,
+  play_duration, was_playing, now_playing_open, updated_at
 ) VALUES (
   1, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
   ?, ?, ?, datetime('now')
 )
@@ -338,10 +399,16 @@ ON CONFLICT(id) DO UPDATE SET
   play_pos=excluded.play_pos,
   queue_index=excluded.queue_index,
   show_search=excluded.show_search,
+  volume=excluded.volume,
+  muted=excluded.muted,
+  play_duration=excluded.play_duration,
+  was_playing=excluded.was_playing,
+  now_playing_open=excluded.now_playing_open,
   updated_at=datetime('now')
 `, snap.ActiveMenu, hidden, snap.SearchFilter, snap.LastSearchQuery,
 		snap.ActiveCarousel, snap.HomeCardCursor, snap.TrackCursor, snap.ListCursor, snap.QueueCursor,
-		snap.PlayPos, snap.QueueIndex, showSearch); err != nil {
+		snap.PlayPos, snap.QueueIndex, showSearch, vol, muted,
+		snap.PlayDuration, wasPlaying, nowPlaying); err != nil {
 		return err
 	}
 

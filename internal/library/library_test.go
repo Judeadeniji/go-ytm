@@ -21,6 +21,11 @@ func TestSaveLoadSessionRoundTrip(t *testing.T) {
 		SearchFilter:     "songs",
 		LastSearchQuery:  "oasis",
 		PlayPos:          42.5,
+		PlayDuration:     210,
+		Volume:           65,
+		Muted:            true,
+		WasPlaying:       true,
+		NowPlayingOpen:   true,
 		QueueIndex:       1,
 		ShowSearch:       true,
 		Queue: []session.Track{
@@ -47,6 +52,12 @@ func TestSaveLoadSessionRoundTrip(t *testing.T) {
 	}
 	if out.PlayPos != 42.5 || !out.ShowSearch {
 		t.Fatalf("playback fields: %#v", out)
+	}
+	if out.PlayDuration != 210 || !out.WasPlaying || !out.NowPlayingOpen {
+		t.Fatalf("resume ui fields: %#v", out)
+	}
+	if out.Volume != 65 || !out.Muted {
+		t.Fatalf("volume fields: %#v", out)
 	}
 }
 
