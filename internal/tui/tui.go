@@ -61,8 +61,10 @@ type Model struct {
 	progress         progress.Model
 	playPos          float64
 	playDuration     float64
-	queuePanelHidden bool // user dismissed the right rail
-	playGen          int  // bumped on each play request; ignores stale extracts
+	scrubbing        bool    // true while dragging/clicking the progress bar
+	scrubPos         float64 // preview position while scrubbing
+	queuePanelHidden bool    // user dismissed the right rail
+	playGen          int     // bumped on each play request; ignores stale extracts
 	playCancel       context.CancelFunc
 
 	// Navigation / detail pages
@@ -451,12 +453,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchPlayProgress(m.player), tickPlayProgress())
 	case playProgressMsg:
 		if msg.Err == nil {
-			m.playPos = msg.Pos
 			if msg.Duration > 0 {
 				m.playDuration = msg.Duration
 			}
-			if m.audioLoaded {
-				m.markSessionDirty()
+			// Don't fight the mouse while scrubbing the progress bar.
+			if !m.scrubbing {
+				m.playPos = msg.Pos
+				if m.audioLoaded {
+					m.markSessionDirty()
+				}
 			}
 		}
 		return m, nil
@@ -673,6 +678,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Pass other events to viewport (e.g. mouse wheel/clicks)
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if mm, cmd, handled := m.handleProgressScrub(mouseMsg); handled {
+			return mm, cmd
+		}
+
 		if m.searchInput.Focused() && mouseMsg.Type == tea.MouseLeft {
 			for i := range m.searchSuggestions {
 				if m.zone.Get(fmt.Sprintf("suggestion_%d", i)).InBounds(mouseMsg) {

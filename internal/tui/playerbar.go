@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/judeadeniji/go-ytm/internal/player"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 const playerBarHeight = 4
@@ -126,8 +127,12 @@ func (m Model) generatePlayerBar(width int) string {
 	}
 	middle := middleLeft + bg.Render(strings.Repeat(" ", middlePad))
 
-	// Progress line
-	posLabel := formatClock(m.playPos)
+	// Progress line — use scrub preview while dragging/clicking the bar.
+	pos := m.playPos
+	if m.scrubbing {
+		pos = m.scrubPos
+	}
+	posLabel := formatClock(pos)
 	durLabel := formatClock(m.playDuration)
 	timeStyle := lipgloss.NewStyle().Foreground(colorSubtext).Background(colorBg)
 	leftTime := timeStyle.Render(posLabel)
@@ -140,7 +145,7 @@ func (m Model) generatePlayerBar(width int) string {
 
 	pct := 0.0
 	if m.playDuration > 0 {
-		pct = m.playPos / m.playDuration
+		pct = pos / m.playDuration
 		if pct < 0 {
 			pct = 0
 		}
@@ -151,7 +156,7 @@ func (m Model) generatePlayerBar(width int) string {
 
 	pb := m.progress
 	pb.Width = barWidth
-	bar := pb.ViewAs(pct)
+	bar := m.zone.Mark("player_progress", pb.ViewAs(pct))
 	progressLine := lipgloss.JoinHorizontal(lipgloss.Center,
 		leftTime,
 		" ",
@@ -168,7 +173,7 @@ func (m Model) generatePlayerBar(width int) string {
 	hints := lipgloss.NewStyle().
 		Foreground(colorSubtext).
 		Background(colorBg).
-		Render("j/k move  ·  enter play  ·  h/l cards  ·  ,/. seek  ·  \\ queue")
+		Render("j/k move  ·  enter play  ·  drag/click bar seek  ·  ,/. seek  ·  \\ queue")
 	hintsPad := width - lipgloss.Width(hints)
 	if hintsPad < 0 {
 		hintsPad = 0
@@ -176,6 +181,73 @@ func (m Model) generatePlayerBar(width int) string {
 	hintsLine := hints + bg.Render(strings.Repeat(" ", hintsPad))
 
 	return lipgloss.JoinVertical(lipgloss.Left, divider, middle, progressLine, hintsLine)
+}
+
+// handleProgressScrub handles click and drag seeking on the progress bar.
+// click (press+release) and drag both seek via absolute position.
+func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
+	if m.currentTrack == nil || m.playDuration <= 0 || !m.audioLoaded {
+		if m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease) {
+			m.scrubbing = false
+			return m, nil, true
+		}
+		return m, nil, false
+	}
+
+	z := m.zone.Get("player_progress")
+
+	switch {
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft,
+		msg.Type == tea.MouseLeft && msg.Action == tea.MouseActionPress:
+		if z.IsZero() || !z.InBounds(msg) {
+			return m, nil, false
+		}
+		m.scrubbing = true
+		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
+		m.playPos = m.scrubPos
+		return m, tea.Batch(seekAbsoluteCmd(m.player, m.scrubPos), fetchPlayProgress(m.player)), true
+
+	case m.scrubbing && (msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion):
+		// Keep scrubbing even if the cursor leaves the bar vertically.
+		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
+		m.playPos = m.scrubPos
+		return m, tea.Batch(seekAbsoluteCmd(m.player, m.scrubPos), fetchPlayProgress(m.player)), true
+
+	case m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease):
+		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
+		m.playPos = m.scrubPos
+		m.scrubbing = false
+		m.markSessionDirty()
+		return m, tea.Batch(seekAbsoluteCmd(m.player, m.scrubPos), fetchPlayProgress(m.player)), true
+	}
+
+	return m, nil, false
+}
+
+func (m Model) seekPosFromProgressMouse(msg tea.MouseMsg, z *zone.ZoneInfo) float64 {
+	if z == nil || z.IsZero() || m.playDuration <= 0 {
+		return m.playPos
+	}
+	w := z.EndX - z.StartX + 1
+	if w <= 1 {
+		return 0
+	}
+	x := msg.X - z.StartX
+	if x < 0 {
+		x = 0
+	}
+	if x > w-1 {
+		x = w - 1
+	}
+	ratio := float64(x) / float64(w-1)
+	pos := ratio * m.playDuration
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > m.playDuration {
+		pos = m.playDuration
+	}
+	return pos
 }
 
 func trackLabel(t *Track) string {

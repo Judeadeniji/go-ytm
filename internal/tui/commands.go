@@ -108,6 +108,16 @@ func seekCmd(p *player.Player, seconds float64) tea.Cmd {
 	}
 }
 
+// seekAbsoluteCmd seeks to an absolute position in seconds.
+func seekAbsoluteCmd(p *player.Player, seconds float64) tea.Cmd {
+	return func() tea.Msg {
+		if err := p.SeekAbsolute(seconds); err != nil {
+			return playerErrMsg{Op: "seek", Err: err}
+		}
+		return nil
+	}
+}
+
 func stopPlayback(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
 		if err := p.Stop(); err != nil {
