@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -108,8 +108,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	}
 	defer tx.Rollback()
 
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS session (
+	if ver < 1 {
+		stmts := []string{
+			`CREATE TABLE IF NOT EXISTS session (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			active_menu TEXT NOT NULL DEFAULT 'Home',
 			queue_panel_hidden INTEGER NOT NULL DEFAULT 0,
@@ -125,25 +126,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			show_search INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);`,
-		`CREATE TABLE IF NOT EXISTS queue_track (
+			`CREATE TABLE IF NOT EXISTS queue_track (
 			position INTEGER PRIMARY KEY,
 			video_id TEXT NOT NULL,
 			title TEXT NOT NULL DEFAULT '',
 			artist TEXT NOT NULL DEFAULT '',
 			thumbnail_url TEXT NOT NULL DEFAULT ''
 		);`,
-		`CREATE TABLE IF NOT EXISTS nav_stack (
+			`CREATE TABLE IF NOT EXISTS nav_stack (
 			position INTEGER PRIMARY KEY,
 			kind TEXT NOT NULL,
 			entity_id TEXT NOT NULL DEFAULT '',
 			title TEXT NOT NULL DEFAULT ''
 		);`,
-		`CREATE TABLE IF NOT EXISTS local_playlist (
+			`CREATE TABLE IF NOT EXISTS local_playlist (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);`,
-		`CREATE TABLE IF NOT EXISTS local_playlist_track (
+			`CREATE TABLE IF NOT EXISTS local_playlist_track (
 			playlist_id INTEGER NOT NULL,
 			position INTEGER NOT NULL,
 			video_id TEXT NOT NULL,
@@ -153,19 +154,38 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			PRIMARY KEY (playlist_id, position),
 			FOREIGN KEY (playlist_id) REFERENCES local_playlist(id) ON DELETE CASCADE
 		);`,
-		`CREATE TABLE IF NOT EXISTS download_cache (
+			`CREATE TABLE IF NOT EXISTS download_cache (
 			video_id TEXT PRIMARY KEY,
 			path TEXT NOT NULL,
 			bytes INTEGER NOT NULL DEFAULT 0,
 			cached_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);`,
-		`INSERT INTO schema_migrations(version) VALUES (1);`,
+			`INSERT INTO schema_migrations(version) VALUES (1);`,
+		}
+		for _, s := range stmts {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v1: %w", err)
+			}
+		}
+		ver = 1
 	}
-	for _, s := range stmts {
-		if _, err := tx.Exec(s); err != nil {
-			return fmt.Errorf("migrate: %w", err)
+
+	if ver < 2 {
+		alters := []string{
+			`ALTER TABLE queue_track ADD COLUMN artist_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE queue_track ADD COLUMN album TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE queue_track ADD COLUMN album_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE queue_track ADD COLUMN duration TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE queue_track ADD COLUMN is_explicit INTEGER NOT NULL DEFAULT 0`,
+			`INSERT INTO schema_migrations(version) VALUES (2)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v2: %w", err)
+			}
 		}
 	}
+
 	return tx.Commit()
 }
 
@@ -233,7 +253,9 @@ FROM session WHERE id = 1`).Scan(
 	snap.ShowSearch = showSearch != 0
 
 	rows, err := db.sql.Query(`
-SELECT video_id, title, artist, thumbnail_url
+SELECT video_id, title, artist, thumbnail_url,
+       COALESCE(artist_id,''), COALESCE(album,''), COALESCE(album_id,''),
+       COALESCE(duration,''), COALESCE(is_explicit,0)
 FROM queue_track ORDER BY position ASC`)
 	if err != nil {
 		return nil, err
@@ -241,9 +263,14 @@ FROM queue_track ORDER BY position ASC`)
 	defer rows.Close()
 	for rows.Next() {
 		var t session.Track
-		if err := rows.Scan(&t.VideoID, &t.Title, &t.Artist, &t.ThumbnailURL); err != nil {
+		var explicit int
+		if err := rows.Scan(
+			&t.VideoID, &t.Title, &t.Artist, &t.ThumbnailURL,
+			&t.ArtistID, &t.Album, &t.AlbumID, &t.Duration, &explicit,
+		); err != nil {
 			return nil, err
 		}
+		t.IsExplicit = explicit != 0
 		snap.Queue = append(snap.Queue, t)
 	}
 	if err := rows.Err(); err != nil {
@@ -322,9 +349,16 @@ ON CONFLICT(id) DO UPDATE SET
 		return err
 	}
 	for i, t := range snap.Queue {
+		explicit := 0
+		if t.IsExplicit {
+			explicit = 1
+		}
 		if _, err := tx.Exec(`
-INSERT INTO queue_track(position, video_id, title, artist, thumbnail_url)
-VALUES (?, ?, ?, ?, ?)`, i, t.VideoID, t.Title, t.Artist, t.ThumbnailURL); err != nil {
+INSERT INTO queue_track(position, video_id, title, artist, thumbnail_url,
+  artist_id, album, album_id, duration, is_explicit)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			i, t.VideoID, t.Title, t.Artist, t.ThumbnailURL,
+			t.ArtistID, t.Album, t.AlbumID, t.Duration, explicit); err != nil {
 			return err
 		}
 	}

@@ -352,6 +352,17 @@ func (p *Player) Load(url string) error {
 	return p.sendCommand("loadfile", url, "replace")
 }
 
+// LoadAt loads url and asks mpv to start at startSec (seconds).
+// Using loadfile's start= option is more reliable than seeking immediately
+// after play on HTTP streams.
+func (p *Player) LoadAt(url string, startSec float64) error {
+	if startSec < 0.5 {
+		return p.Load(url)
+	}
+	opts := fmt.Sprintf("start=%.3f", startSec)
+	return p.sendCommand("loadfile", url, "replace", opts)
+}
+
 // Pause pauses playback
 func (p *Player) Pause() error {
 	return p.sendCommand("set_property", "pause", true)

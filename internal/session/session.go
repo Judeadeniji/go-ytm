@@ -10,7 +10,12 @@ type Track struct {
 	VideoID      string `json:"videoId"`
 	Title        string `json:"title"`
 	Artist       string `json:"artist"`
+	ArtistID     string `json:"artistId,omitempty"`
+	Album        string `json:"album,omitempty"`
+	AlbumID      string `json:"albumId,omitempty"`
+	Duration     string `json:"duration,omitempty"`
 	ThumbnailURL string `json:"thumbnailUrl"`
+	IsExplicit   bool   `json:"isExplicit,omitempty"`
 }
 
 // NavItem is one restored navigation stack entry.
