@@ -52,8 +52,8 @@ test:
 lint:
 	@echo "==> Running golangci-lint..."
 	@if [ ! -f $(GOLANGCI_LINT_BIN) ]; then \
-		echo "Installing golangci-lint..."; \
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin v1.59.1; \
+		echo "Installing golangci-lint via go install..."; \
+		CGO_ENABLED=0 $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.59.1; \
 	fi
 	$(GOLANGCI_LINT_BIN) run ./...
 
