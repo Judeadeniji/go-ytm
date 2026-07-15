@@ -1,5 +1,7 @@
 package ytmapi
 
+import "strings"
+
 // Thumbnail is a shared image size entry from ytmusicapi responses.
 type Thumbnail struct {
 	URL    string `json:"url"`
@@ -144,6 +146,7 @@ type PlaylistPage struct {
 	Year        string      `json:"year,omitempty"`
 	Duration    string      `json:"duration,omitempty"`
 	TrackCount  int         `json:"trackCount,omitempty"`
+	Views       any         `json:"views,omitempty"` // int or null from ytmusicapi
 	Privacy     string      `json:"privacy,omitempty"`
 	Author      any         `json:"author,omitempty"`
 	Thumbnails  []Thumbnail `json:"thumbnails,omitempty"`
@@ -158,19 +161,51 @@ type WatchPlaylist struct {
 	Related    string      `json:"related,omitempty"`
 }
 
-// SongDetails is a flattened get_song metadata payload (no streaming URLs).
+// CreditSection is one credits block (Performed by / Written by / …).
+type CreditSection struct {
+	LocalizedTitle string   `json:"localized_title"`
+	Data           []string `json:"data"`
+}
+
+// SongCredits is get_song_credits output (names only).
+type SongCredits struct {
+	PerformedBy             *CreditSection  `json:"performed_by,omitempty"`
+	WrittenBy               *CreditSection  `json:"written_by,omitempty"`
+	ProducedBy              *CreditSection  `json:"produced_by,omitempty"`
+	MusicMetadataProvidedBy *CreditSection  `json:"music_metadata_provided_by,omitempty"`
+	OtherSections           []CreditSection `json:"other_sections,omitempty"`
+}
+
+// SongDetails is catalog-style metadata for the currently playing song.
+// Artists/album are resolved names; IDs are for navigation only.
 type SongDetails struct {
-	VideoID        string      `json:"videoId"`
-	Title          string      `json:"title"`
-	Author         string      `json:"author,omitempty"`
-	ChannelID      string      `json:"channelId,omitempty"`
-	LengthSeconds  string      `json:"lengthSeconds,omitempty"`
-	ViewCount      string      `json:"viewCount,omitempty"`
-	MusicVideoType string      `json:"musicVideoType,omitempty"`
-	IsLiveContent  bool        `json:"isLiveContent,omitempty"`
-	Thumbnails     []Thumbnail `json:"thumbnails,omitempty"`
-	Description    string      `json:"description,omitempty"`
-	PublishDate    string      `json:"publishDate,omitempty"`
-	Category       string      `json:"category,omitempty"`
-	URLCanonical   string      `json:"urlCanonical,omitempty"`
+	VideoID         string       `json:"videoId"`
+	Title           string       `json:"title"`
+	Artists         []NamedRef   `json:"artists,omitempty"`
+	Album           *NamedRef    `json:"album,omitempty"`
+	Year            string       `json:"year,omitempty"`
+	Duration        string       `json:"duration,omitempty"`
+	DurationSeconds int          `json:"durationSeconds,omitempty"`
+	IsExplicit      bool         `json:"isExplicit,omitempty"`
+	TrackNumber     *int         `json:"trackNumber,omitempty"`
+	AlbumType       string       `json:"albumType,omitempty"`
+	AlbumTrackCount int          `json:"albumTrackCount,omitempty"`
+	LikeStatus      string       `json:"likeStatus,omitempty"`
+	VideoType       string       `json:"videoType,omitempty"`
+	Thumbnails      []Thumbnail  `json:"thumbnails,omitempty"`
+	Credits         *SongCredits `json:"credits,omitempty"`
+}
+
+// ArtistNames joins artist display names.
+func (s *SongDetails) ArtistNames() string {
+	if s == nil || len(s.Artists) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(s.Artists))
+	for _, a := range s.Artists {
+		if a.Name != "" {
+			names = append(names, a.Name)
+		}
+	}
+	return strings.Join(names, ", ")
 }

@@ -177,35 +177,159 @@ def watch(
 @app.get("/song/{video_id}")
 def song(video_id: str):
     """
-    Song / video metadata via get_song(videoId).
-    Returns a flattened subset of videoDetails + microformat (not streaming URLs).
+    Catalog-style song metadata for the Details rail.
+
+    Composes ytmusicapi sources (not raw get_song videoDetails):
+    - get_watch_playlist → title, artists[{name,id}], album[{name,id}], year, length
+    - get_album (when album id known) → type, track #, explicit, creditsBrowseId
+    - get_song_credits → performed/written/produced by
+    - get_song only as a title/duration/author-name fallback
     """
-    try:
-        result = ytmusic.get_song(video_id)
-    except _CATCH as exc:
-        raise _ytm_error(exc) from exc
-
-    vd = result.get("videoDetails") or {}
-    mf = (result.get("microformat") or {}).get("microformatDataRenderer") or {}
-    thumbs = (vd.get("thumbnail") or {}).get("thumbnails") or []
-    if not thumbs:
-        thumbs = (mf.get("thumbnail") or {}).get("thumbnails") or []
-
-    return {
-        "videoId": vd.get("videoId") or video_id,
-        "title": vd.get("title") or "",
-        "author": vd.get("author") or "",
-        "channelId": vd.get("channelId") or "",
-        "lengthSeconds": vd.get("lengthSeconds") or "",
-        "viewCount": vd.get("viewCount") or "",
-        "musicVideoType": vd.get("musicVideoType") or "",
-        "isLiveContent": bool(vd.get("isLiveContent")),
-        "thumbnails": thumbs,
-        "description": mf.get("description") or "",
-        "publishDate": mf.get("publishDate") or mf.get("uploadDate") or "",
-        "category": mf.get("category") or "",
-        "urlCanonical": mf.get("urlCanonical") or "",
+    out: dict = {
+        "videoId": video_id,
+        "title": "",
+        "artists": [],
+        "album": None,
+        "year": "",
+        "duration": "",
+        "durationSeconds": 0,
+        "isExplicit": False,
+        "trackNumber": None,
+        "albumType": "",
+        "albumTrackCount": 0,
+        "likeStatus": "",
+        "videoType": "",
+        "thumbnails": [],
+        "credits": None,
     }
+
+    def _format_secs(secs: int) -> str:
+        if secs <= 0:
+            return ""
+        m, s = divmod(secs, 60)
+        if m >= 60:
+            h, m = divmod(m, 60)
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+
+    # --- watch playlist: best source for artist/album names ---
+    try:
+        watch = ytmusic.get_watch_playlist(videoId=video_id, limit=5)
+        tracks = watch.get("tracks") or []
+        tr = None
+        for candidate in tracks:
+            if candidate.get("videoId") == video_id:
+                tr = candidate
+                break
+        if tr is None and tracks:
+            tr = tracks[0]
+        if tr:
+            out["title"] = tr.get("title") or ""
+            out["artists"] = [
+                {"name": a.get("name") or "", "id": a.get("id") or ""}
+                for a in (tr.get("artists") or [])
+                if isinstance(a, dict) and (a.get("name") or "")
+            ]
+            album = tr.get("album")
+            if isinstance(album, dict):
+                out["album"] = {
+                    "name": album.get("name") or "",
+                    "id": album.get("id") or "",
+                }
+            elif isinstance(album, str) and album:
+                out["album"] = {"name": album, "id": ""}
+            out["year"] = tr.get("year") or ""
+            out["duration"] = tr.get("length") or tr.get("duration") or ""
+            out["likeStatus"] = tr.get("likeStatus") or ""
+            out["videoType"] = tr.get("videoType") or ""
+            out["isExplicit"] = bool(tr.get("isExplicit"))
+            thumbs = tr.get("thumbnail") or tr.get("thumbnails") or []
+            if isinstance(thumbs, list):
+                out["thumbnails"] = thumbs
+    except _CATCH:
+        pass
+
+    # --- album page: track number, release type, credits browse id ---
+    album_id = ""
+    if isinstance(out.get("album"), dict):
+        album_id = out["album"].get("id") or ""
+    credits_id = None
+    if album_id:
+        try:
+            album = ytmusic.get_album(album_id)
+            out["albumType"] = album.get("type") or ""
+            out["albumTrackCount"] = int(album.get("trackCount") or 0)
+            if not out["year"]:
+                out["year"] = album.get("year") or ""
+            if not out["artists"]:
+                out["artists"] = [
+                    {"name": a.get("name") or "", "id": a.get("id") or ""}
+                    for a in (album.get("artists") or [])
+                    if isinstance(a, dict) and (a.get("name") or "")
+                ]
+            if isinstance(out.get("album"), dict) and not out["album"].get("name"):
+                out["album"]["name"] = album.get("title") or ""
+            for i, atr in enumerate(album.get("tracks") or []):
+                if atr.get("videoId") != video_id:
+                    continue
+                tn = atr.get("trackNumber")
+                if isinstance(tn, int) and tn > 0:
+                    out["trackNumber"] = tn
+                else:
+                    out["trackNumber"] = i + 1
+                out["isExplicit"] = bool(atr.get("isExplicit"))
+                if atr.get("duration"):
+                    out["duration"] = atr["duration"]
+                ds = atr.get("duration_seconds")
+                if isinstance(ds, (int, float)) and ds > 0:
+                    out["durationSeconds"] = int(ds)
+                credits_id = atr.get("creditsBrowseId") or credits_id
+                if atr.get("artists"):
+                    out["artists"] = [
+                        {"name": a.get("name") or "", "id": a.get("id") or ""}
+                        for a in atr["artists"]
+                        if isinstance(a, dict) and (a.get("name") or "")
+                    ]
+                break
+        except _CATCH:
+            pass
+
+    # --- credits: performers, writers, producers (names, not browse ids) ---
+    if credits_id:
+        try:
+            out["credits"] = ytmusic.get_song_credits(credits_id)
+        except _CATCH:
+            out["credits"] = None
+
+    # --- fallback: player playerDetails for missing title / length / author ---
+    if not out["title"] or not out["duration"] or not out["artists"]:
+        try:
+            song = ytmusic.get_song(video_id)
+            vd = song.get("videoDetails") or {}
+            if not out["title"]:
+                out["title"] = vd.get("title") or ""
+            if not out["artists"] and vd.get("author"):
+                # Author name only — never surface raw channelId as the label.
+                out["artists"] = [{"name": vd["author"], "id": vd.get("channelId") or ""}]
+            if not out["duration"]:
+                try:
+                    secs = int(vd.get("lengthSeconds") or 0)
+                except (TypeError, ValueError):
+                    secs = 0
+                if secs > 0:
+                    out["durationSeconds"] = secs
+                    out["duration"] = _format_secs(secs)
+            if not out["thumbnails"]:
+                thumbs = (vd.get("thumbnail") or {}).get("thumbnails") or []
+                if thumbs:
+                    out["thumbnails"] = thumbs
+        except _CATCH:
+            pass
+
+    if not out["duration"] and out["durationSeconds"]:
+        out["duration"] = _format_secs(int(out["durationSeconds"]))
+
+    return out
 
 
 if __name__ == "__main__":
