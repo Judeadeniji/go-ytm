@@ -48,6 +48,12 @@ type Model struct {
 	sugCancel         context.CancelFunc
 	zone              *zone.Manager
 
+	oauthState        int // 0: None, 1: Entering Client ID, 2: Entering Client Secret, 3: Waiting
+	oauthInput        textinput.Model
+	oauthClientID     string
+	oauthClientSecret string
+	oauthCodeResp     *ytmapi.OAuthCodeResponse
+
 	searchResults    []ytmapi.SearchResult
 	searchFilter     string // api filter: "", songs, albums, artists, playlists
 	lastSearchQuery  string
@@ -155,6 +161,14 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 	ti.CharLimit = 156
 	ti.Width = 56 // Leave room for padding
 
+	oti := textinput.New()
+	oti.Placeholder = "Client ID"
+	oti.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorSubtext)
+	oti.TextStyle = lipgloss.NewStyle().Foreground(colorText)
+	oti.Cursor.Style = lipgloss.NewStyle().Foreground(colorText)
+	oti.CharLimit = 200
+	oti.Width = 60
+
 	store, err := library.Open()
 	status := "Ready"
 	if err != nil {
@@ -188,6 +202,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		rightViewport:     viewport.New(0, 0),
 		lyricsViewport:    viewport.New(0, 0),
 		searchInput:       ti,
+		oauthInput:        oti,
 		zone:              zone.New(),
 		searchResults:     nil,
 		ytmapiClient:      apiClient,
@@ -229,6 +244,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.enqueueVisibleImages(m.mainWidth())
 
 	case tea.KeyMsg:
+		if m.oauthState == 1 || m.oauthState == 2 {
+			switch msg.String() {
+			case "esc":
+				m.oauthState = 0
+				m.oauthInput.Blur()
+				m.setMainContent()
+				return m, nil
+			case "enter":
+				val := strings.TrimSpace(m.oauthInput.Value())
+				if m.oauthState == 1 {
+					if val != "" {
+						m.oauthClientID = val
+					}
+					m.oauthState = 2
+					m.oauthInput.Reset()
+					m.oauthInput.Placeholder = "Client Secret (optional)"
+					m.setMainContent()
+					return m, nil
+				} else if m.oauthState == 2 {
+					m.oauthClientSecret = val
+					m.oauthState = 3
+					m.oauthInput.Blur()
+					m.statusMsg = "Requesting OAuth code..."
+					m.setMainContent()
+					return m, m.fetchOAuthCodeCmd()
+				}
+			}
+			var cmd tea.Cmd
+			m.oauthInput, cmd = m.oauthInput.Update(msg)
+			m.setMainContent()
+			return m, cmd
+		}
+
 		// If the search bar is focused, hijack keyboard events
 		if m.searchInput.Focused() {
 			switch msg.String() {
@@ -436,8 +484,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "X":
 			return m.cycleCrossfadeSec()
 		case "<":
+			if m.activePane == PaneMain && m.currentScreen() == screenArtist {
+				if mm, handled := m.moveArtistCarousel(-1); handled {
+					return mm, mm.enqueueVisibleImages(mm.mainWidth())
+				}
+			}
 			return m.adjustTempo(-0.05)
 		case ">":
+			if m.activePane == PaneMain && m.currentScreen() == screenArtist {
+				if mm, handled := m.moveArtistCarousel(1); handled {
+					return mm, mm.enqueueVisibleImages(mm.mainWidth())
+				}
+			}
 			return m.adjustTempo(0.05)
 		case "{":
 			return m.adjustPitch(-0.5)
@@ -450,12 +508,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "S":
 			return m.toggleShuffle()
 		case ",":
+			if m.activePane == PaneMain && m.currentScreen() == screenArtist {
+				if mm, handled := m.moveArtistCarousel(-1); handled {
+					return mm, mm.enqueueVisibleImages(mm.mainWidth())
+				}
+			}
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
 				return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
 			}
 			return m, nil
 		case ".":
+			if m.activePane == PaneMain && m.currentScreen() == screenArtist {
+				if mm, handled := m.moveArtistCarousel(1); handled {
+					return mm, mm.enqueueVisibleImages(mm.mainWidth())
+				}
+			}
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
 				return m, tea.Batch(seekCmd(m.player, 5), fetchPlayProgress(m.player))
@@ -469,8 +537,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.activePane == PaneMain && m.onHomeScreen() {
-				return m.moveHomeCard(1)
+			if m.activePane == PaneMain {
+				if m.onHomeScreen() {
+					return m.moveHomeCard(1)
+				}
+				if m.currentScreen() == screenArtist {
+					if mm, handled := m.moveArtistCarousel(1); handled {
+						return mm, mm.enqueueVisibleImages(mm.mainWidth())
+					}
+				}
 			}
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -485,8 +560,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.activePane == PaneMain && m.onHomeScreen() {
-				return m.moveHomeCard(-1)
+			if m.activePane == PaneMain {
+				if m.onHomeScreen() {
+					return m.moveHomeCard(-1)
+				}
+				if m.currentScreen() == screenArtist {
+					if mm, handled := m.moveArtistCarousel(-1); handled {
+						return mm, mm.enqueueVisibleImages(mm.mainWidth())
+					}
+				}
 			}
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -499,7 +581,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if mm, handled := m.moveListFocus(-1); handled {
-				return mm, nil
+				return mm, mm.enqueueVisibleImages(mm.mainWidth())
 			}
 			return m, nil
 		case "down", "j":
@@ -508,7 +590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if mm, handled := m.moveListFocus(1); handled {
-				return mm, nil
+				return mm, mm.enqueueVisibleImages(mm.mainWidth())
 			}
 			return m, nil
 		case "pgup", "ctrl+u":
@@ -1162,6 +1244,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, debounceImagesRedraw()
 		}
 		return m, nil
+	
+	case oauthCodeMsg:
+		if msg.err != nil {
+			m.oauthState = 0
+			m.statusMsg = fmt.Sprintf("OAuth error: %v", msg.err)
+			m.setMainContent()
+			return m, nil
+		}
+		m.oauthCodeResp = msg.resp
+		m.statusMsg = "Waiting for browser authorization..."
+		m.setMainContent()
+		return m, m.pollOAuthTokenCmd(msg.resp.Interval)
+
+	case oauthTokenMsg:
+		if msg.err != nil {
+			m.oauthState = 0
+			m.statusMsg = fmt.Sprintf("OAuth token error: %v", msg.err)
+			m.setMainContent()
+			return m, nil
+		}
+		if msg.resp.Status == "pending" {
+			return m, m.pollOAuthTokenCmd(m.oauthCodeResp.Interval)
+		}
+		// Success!
+		m.oauthState = 0
+		m.statusMsg = "Successfully authenticated!"
+		m.oauthCodeResp = nil
+		m.setMainContent()
+		return m, nil
 	case imagesRedrawMsg:
 		m.imageDirty = false
 		m.setMainContent()
@@ -1249,6 +1360,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if m.activeMenu == "Settings" && !m.nowPlayingOpen {
+				if m.zone.Get("settings_oauth").InBounds(mouseMsg) {
+					m.oauthState = 1
+					m.oauthInput.Focus()
+					m.setMainContent()
+					return m, textinput.Blink
+				}
 				if m.zone.Get("settings_normalize").InBounds(mouseMsg) {
 					return m.toggleNormalize()
 				}
@@ -1329,6 +1446,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.carouselOffsets[title]++
 					}
 					m.setMainContent()
+					return m, m.enqueueVisibleImages(m.mainWidth())
+				}
+			}
+
+			if m.artistPage != nil && m.currentScreen() == screenArtist {
+				checkArtistCarousel := func(title string, maxLen int) bool {
+					if m.zone.Get(title+"_left").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] > 0 { m.carouselOffsets[title]-- }
+						m.setMainContent()
+						return true
+					}
+					if m.zone.Get(title+"_right").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] < maxLen-1 { m.carouselOffsets[title]++ }
+						m.setMainContent()
+						return true
+					}
+					return false
+				}
+				a := m.artistPage
+				if a.Albums != nil && checkArtistCarousel("Albums", len(a.Albums.Results)) {
+					return m, m.enqueueVisibleImages(m.mainWidth())
+				}
+				if a.Singles != nil && checkArtistCarousel("Singles & EPs", len(a.Singles.Results)) {
+					return m, m.enqueueVisibleImages(m.mainWidth())
+				}
+				if a.Related != nil && checkArtistCarousel("Fans Also Like", len(a.Related.Results)) {
 					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 			}
@@ -1697,4 +1840,39 @@ func (m *Model) putImageCache(key string, img *KittyImage) {
 	}
 	m.imageCache[key] = img
 	m.imageCacheOrder = append(m.imageCacheOrder, key)
+}
+
+type oauthCodeMsg struct {
+	resp *ytmapi.OAuthCodeResponse
+	err  error
+}
+
+func (m *Model) fetchOAuthCodeCmd() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.ytmapiClient.OAuthCode(context.Background(), m.oauthClientID, m.oauthClientSecret)
+		return oauthCodeMsg{resp: resp, err: err}
+	}
+}
+
+type oauthTokenMsg struct {
+	resp *ytmapi.OAuthTokenResponse
+	err  error
+}
+
+func (m *Model) fetchOAuthTokenCmd() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.ytmapiClient.OAuthToken(context.Background(), m.oauthClientID, m.oauthClientSecret, m.oauthCodeResp.DeviceCode)
+		return oauthTokenMsg{resp: resp, err: err}
+	}
+}
+
+func (m *Model) pollOAuthTokenCmd(interval int) tea.Cmd {
+	return tea.Tick(time.Duration(interval)*time.Second, func(time.Time) tea.Msg {
+		resp, err := m.ytmapiClient.OAuthToken(context.Background(), m.oauthClientID, m.oauthClientSecret, m.oauthCodeResp.DeviceCode)
+		return oauthTokenMsg{resp: resp, err: err}
+	})
+}
+
+func explicitBadge() string {
+	return " 🅴"
 }

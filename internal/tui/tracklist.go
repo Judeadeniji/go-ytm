@@ -126,7 +126,11 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 	}
 
 	num := lipgloss.NewStyle().Foreground(numColor).Background(bg).Width(numW).Render(fmt.Sprintf("%d", i+1))
-	title := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(titleW).MaxWidth(titleW).Render(tr.Title)
+	tText := tr.Title
+	if tr.IsExplicit {
+		tText += explicitBadge()
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(titleW).MaxWidth(titleW).Render(tText)
 	artist := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(artistW).MaxWidth(artistW).Render(tr.ArtistName())
 	dur := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(durW).Align(lipgloss.Right).Render(tr.DurationLabel())
 

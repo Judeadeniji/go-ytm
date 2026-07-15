@@ -525,12 +525,16 @@ func (m Model) renderQueueListItem(i int, tr Track, inner int, playing bool) str
 	if lineBudget < 6 {
 		lineBudget = 6
 	}
+	tText := tr.Title
+	if tr.IsExplicit {
+		tText += explicitBadge()
+	}
 	title := lipgloss.NewStyle().
 		Foreground(titleColor).
 		Bold(focused || playing).
 		Background(bg).
 		MaxWidth(lineBudget).
-		Render(tr.Title)
+		Render(tText)
 	row1 := bullet + title
 
 	artistBudget := inner - 2

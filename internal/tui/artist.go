@@ -78,6 +78,9 @@ func (m Model) generateArtistContent(mainWidth int) string {
 				}
 				item := a.Songs.Results[i+j]
 				rowTitle := mapStr(item, "title")
+				if b, ok := item["isExplicit"].(bool); ok && b {
+					rowTitle += explicitBadge()
+				}
 				sub := artistRefName(item["album"])
 				if v := ytmapi.FormatCount(mapStr(item, "views")); v != "" {
 					if sub != "" { sub = sub + " · " + v } else { sub = v }
@@ -135,13 +138,24 @@ func (m Model) generateArtistContent(mainWidth int) string {
 
 		titleStr := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
 		
-		// For now, no active scrolling buttons for artist page carousels to keep it simple,
-		// just show as many as fit in the width.
-		sb.WriteString(titleStr + "\n\n")
+		btnStyle := lipgloss.NewStyle().Padding(0, 1)
+		leftBtn := m.zone.Mark(title+"_left", btnStyle.Render("<"))
+		rightBtn := m.zone.Mark(title+"_right", btnStyle.Render(">"))
+		arrows := lipgloss.JoinHorizontal(lipgloss.Top, leftBtn, " ", rightBtn)
+
+		space := contentWidth - lipgloss.Width(titleStr) - lipgloss.Width(arrows)
+		if space < 1 { space = 1 }
+		header := lipgloss.JoinHorizontal(lipgloss.Top, titleStr, strings.Repeat(" ", space), arrows)
+		sb.WriteString(header + "\n\n")
 
 		maxVisible := (contentWidth / cardWidth)
 		if maxVisible < 1 { maxVisible = 1 }
-		visibleItems := items
+		
+		offset := m.carouselOffsets[title]
+		if offset < 0 { offset = 0 }
+		if offset > len(items) { offset = len(items) }
+		
+		visibleItems := items[offset:]
 		if len(visibleItems) > maxVisible {
 			visibleItems = visibleItems[:maxVisible]
 		}

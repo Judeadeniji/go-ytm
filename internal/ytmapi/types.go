@@ -34,6 +34,7 @@ type SearchResult struct {
 	ItemCount string      `json:"itemCount,omitempty"`
 	Album     NamedRef    `json:"album,omitempty"`
 	VideoType string      `json:"videoType,omitempty"`
+	IsExplicit bool       `json:"isExplicit,omitempty"`
 	Thumbnails []Thumbnail `json:"thumbnails,omitempty"`
 }
 
@@ -62,6 +63,7 @@ type HomeCarouselItem struct {
 	Subscribers string      `json:"subscribers,omitempty"`
 	Count       string      `json:"count,omitempty"`
 	Author      any         `json:"author,omitempty"` // string or {name,id}
+	IsExplicit  bool        `json:"isExplicit,omitempty"`
 	Thumbnails  []Thumbnail `json:"thumbnails,omitempty"`
 }
 

@@ -45,8 +45,9 @@ func (m Model) onHomeScreen() bool {
 
 // artistFocusItem is one keyboard-addressable row on an artist page.
 type artistFocusItem struct {
-	Kind string
-	Item map[string]any
+	Kind  string
+	Title string
+	Item  map[string]any
 }
 
 func (m Model) artistFocusItems() []artistFocusItem {
@@ -55,33 +56,47 @@ func (m Model) artistFocusItems() []artistFocusItem {
 	}
 	a := m.artistPage
 	var out []artistFocusItem
-	add := func(kind string, results []map[string]any) {
+	add := func(kind, title string, results []map[string]any) {
 		for i, item := range results {
-			if i >= 12 {
-				break
-			}
-			if artistItemZone(kind, item) == "" {
-				continue
-			}
-			out = append(out, artistFocusItem{Kind: kind, Item: item})
+			if i >= 12 { break }
+			if artistItemZone(kind, item) == "" { continue }
+			out = append(out, artistFocusItem{Kind: kind, Title: title, Item: item})
 		}
 	}
-	if a.Songs != nil {
-		add("song", a.Songs.Results)
-	}
-	if a.Albums != nil {
-		add("album", a.Albums.Results)
-	}
-	if a.Singles != nil {
-		add("album", a.Singles.Results)
-	}
-	if a.Videos != nil {
-		add("video", a.Videos.Results)
-	}
-	if a.Related != nil {
-		add("related", a.Related.Results)
-	}
+	if a.Songs != nil { add("song", "", a.Songs.Results) }
+	if a.Albums != nil { add("album", "Albums", a.Albums.Results) }
+	if a.Singles != nil { add("album", "Singles & EPs", a.Singles.Results) }
+	if a.Videos != nil { add("video", "Videos", a.Videos.Results) }
+	if a.Related != nil { add("related", "Fans Also Like", a.Related.Results) }
 	return out
+}
+
+func (m *Model) ensureArtistCarouselCursorVisible(items []artistFocusItem) {
+	if m.listCursor < 0 || m.listCursor >= len(items) { return }
+	focused := items[m.listCursor]
+	if focused.Title == "" { return } // Songs aren't carousels
+
+	// Find the local index of this item in its carousel
+	localIndex := 0
+	for i := 0; i < m.listCursor; i++ {
+		if items[i].Title == focused.Title { localIndex++ }
+	}
+
+	contentWidth := m.mainWidth() - 2
+	cardWidth := 28
+	maxVisible := contentWidth / cardWidth
+	if maxVisible < 1 { maxVisible = 1 }
+
+	title := focused.Title
+	offset := m.carouselOffsets[title]
+	if localIndex < offset {
+		m.carouselOffsets[title] = localIndex
+	} else if localIndex >= offset+maxVisible {
+		m.carouselOffsets[title] = localIndex - maxVisible + 1
+	}
+	if m.carouselOffsets[title] < 0 {
+		m.carouselOffsets[title] = 0
+	}
 }
 
 func clampIndex(i, n int) int {
@@ -153,6 +168,7 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 			return m, false
 		}
 		m.listCursor = clampIndex(m.listCursor+delta, len(items))
+		m.ensureArtistCarouselCursorVisible(items)
 		m.setMainContent()
 		m.ensureListCursorInView(6, 1)
 		return m, true
@@ -169,6 +185,34 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 	}
 
 	return m, false
+}
+
+// moveArtistCarousel shifts focus horizontally within an artist carousel.
+func (m Model) moveArtistCarousel(delta int) (Model, bool) {
+	if m.currentScreen() != screenArtist {
+		return m, false
+	}
+	items := m.artistFocusItems()
+	if m.listCursor < 0 || m.listCursor >= len(items) {
+		return m, false
+	}
+	focused := items[m.listCursor]
+	if focused.Title == "" {
+		return m, false // Not a carousel
+	}
+
+	target := m.listCursor + delta
+	if target < 0 || target >= len(items) {
+		return m, false
+	}
+	if items[target].Title != focused.Title {
+		return m, false
+	}
+
+	m.listCursor = target
+	m.ensureArtistCarouselCursorVisible(items)
+	m.setMainContent()
+	return m, true
 }
 
 // moveHomeCard shifts focus within the active home carousel (horizontal).

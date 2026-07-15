@@ -97,6 +97,9 @@ func (m Model) generatePlayerBar(width int) string {
 	var trackInfo string
 	if m.currentTrack != nil {
 		title := m.currentTrack.Title
+		if m.currentTrack.IsExplicit {
+			title += explicitBadge()
+		}
 		artist := m.currentTrack.Artist
 		infoStyle := lipgloss.NewStyle().Foreground(colorText).Background(colorBg).Bold(true)
 		artistStyle := lipgloss.NewStyle().Foreground(colorSubtext).Background(colorBg)
@@ -337,10 +340,14 @@ func trackLabel(t *Track) string {
 	if t == nil {
 		return "Nothing playing"
 	}
-	if t.Artist != "" {
-		return fmt.Sprintf("%s — %s", t.Title, t.Artist)
+	title := t.Title
+	if t.IsExplicit {
+		title += explicitBadge()
 	}
-	return t.Title
+	if t.Artist != "" {
+		return fmt.Sprintf("%s — %s", title, t.Artist)
+	}
+	return title
 }
 
 func formatClock(seconds float64) string {

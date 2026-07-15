@@ -114,6 +114,9 @@ func (m Model) renderCarouselRow(index int, title string, cards []ytmapi.HomeCar
 		if len(t) > 20 {
 			t = t[:17] + "..."
 		}
+		if card.IsExplicit {
+			t += explicitBadge()
+		}
 		s := homeCardSubtitle(card)
 		if len(s) > 22 {
 			s = s[:19] + "..."
@@ -251,6 +254,26 @@ func (m Model) generateSettingsContent(mainWidth int) string {
 	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Settings")
 	mb.WriteString(header)
 	mb.WriteString("\n\n")
+	
+	mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Account"))
+	mb.WriteString("\n\n")
+
+	if m.oauthState == 0 {
+		btn := m.zone.Mark("settings_oauth", lipgloss.NewStyle().Foreground(colorSubtext).Render("[ Login to YouTube Music ]"))
+		mb.WriteString(btn)
+	} else if m.oauthState == 1 || m.oauthState == 2 {
+		mb.WriteString("Enter " + m.oauthInput.Placeholder + ":\n")
+		mb.WriteString(m.oauthInput.View())
+		mb.WriteString("\n(Press Esc to cancel)")
+	} else if m.oauthState == 3 && m.oauthCodeResp != nil {
+		mb.WriteString(fmt.Sprintf("1. Go to: %s\n", m.oauthCodeResp.VerificationURL))
+		mb.WriteString(fmt.Sprintf("2. Enter code: %s\n\n", lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(m.oauthCodeResp.UserCode)))
+		mb.WriteString("Waiting for authorization...")
+	}
+	mb.WriteString("\n\n")
+	
+	mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Playback"))
+	mb.WriteString("\n\n")
 
 	// Render settings options
 	renderRow := func(label, val, zoneID, hint string) string {
@@ -338,6 +361,9 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			flatIdx++
 
 			title := res.Title
+			if res.IsExplicit {
+				title += explicitBadge()
+			}
 			badge := ""
 			if res.ResultType == "album" && res.Type != "" {
 				badge = res.Type
