@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -594,10 +595,35 @@ func (p *Player) ToggleMute() error {
 // loudnormFilter is a practical one-pass loudness target for headphones.
 const loudnormFilter = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
-// SetNormalize enables or disables EBU R128 loudness normalization via mpv af.
-func (p *Player) SetNormalize(on bool) error {
-	if on {
-		return p.sendCommand("set_property", "af", loudnormFilter)
+// silenceSkipFilter removes silences throughout the track.
+const silenceSkipFilter = "silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB"
+
+// SetAudioFilters enables or disables audio filters via mpv af.
+func (p *Player) SetAudioFilters(normalize, silenceSkip bool, pitchSemi float64, eqFilter string) error {
+	var filters []string
+	if normalize {
+		filters = append(filters, loudnormFilter)
 	}
-	return p.sendCommand("set_property", "af", "")
+	if silenceSkip {
+		filters = append(filters, silenceSkipFilter)
+	}
+	if pitchSemi != 0 {
+		scale := math.Pow(2, pitchSemi/12.0)
+		filters = append(filters, fmt.Sprintf("rubberband=pitch-scale=%.4f", scale))
+	}
+	if eqFilter != "" {
+		filters = append(filters, eqFilter)
+	}
+	return p.sendCommand("set_property", "af", strings.Join(filters, ","))
+}
+
+// SetTempo sets the playback speed (tempo). Default is 1.0.
+func (p *Player) SetTempo(speed float64) error {
+	if speed < 0.25 {
+		speed = 0.25
+	}
+	if speed > 4.0 {
+		speed = 4.0
+	}
+	return p.sendCommand("set_property", "speed", speed)
 }

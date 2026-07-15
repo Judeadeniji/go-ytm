@@ -308,6 +308,22 @@ func (m Model) renderRailDetails(inner int) string {
 	sb.WriteString(m.renderMetaRow(inner, "Norm", normLabel))
 	sb.WriteString(m.zone.Mark("rail_meta_norm", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("o toggle"))))
 	sb.WriteString("\n")
+	silenceLabel := "Off"
+	if m.silenceSkip {
+		silenceLabel = "On"
+	}
+	sb.WriteString(m.renderMetaRow(inner, "Silence", silenceLabel))
+	sb.WriteString(m.zone.Mark("rail_meta_silence", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("v toggle"))))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderMetaRow(inner, "Tempo", fmt.Sprintf("%.2fx", m.tempo)))
+	sb.WriteString(m.zone.Mark("rail_meta_tempo", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("< / > adjust"))))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderMetaRow(inner, "Pitch", fmt.Sprintf("%+.1f semi", m.pitch)))
+	sb.WriteString(m.zone.Mark("rail_meta_pitch", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("{ / } adjust"))))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderMetaRow(inner, "EQ", eqPresets[m.eqPreset].Name))
+	sb.WriteString(m.zone.Mark("rail_meta_eq", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("E cycle"))))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMetaRow(inner, "Crossfade", m.crossfadeSecLabel()))
 	sb.WriteString(m.zone.Mark("rail_meta_crossfade", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("x on/off · X duration"))))
 	sb.WriteString("\n")
@@ -607,6 +623,22 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	}
 	if m.zone.Get("rail_meta_norm").InBounds(msg) {
 		mm, cmd := m.toggleNormalize()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_silence").InBounds(msg) {
+		mm, cmd := m.toggleSilenceSkip()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_tempo").InBounds(msg) {
+		mm, cmd := m.resetTempo()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_pitch").InBounds(msg) {
+		mm, cmd := m.resetPitch()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_eq").InBounds(msg) {
+		mm, cmd := m.cycleEQPreset()
 		return mm, cmd, true
 	}
 	if m.zone.Get("rail_meta_crossfade").InBounds(msg) {

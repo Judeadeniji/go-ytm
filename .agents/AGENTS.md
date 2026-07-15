@@ -61,10 +61,10 @@ If an agent is asked to "port the ytm-api to Go for consistency," push back and 
 1. ~~mpv IPC wrapper + basic playback~~
 2. ~~Search (kkdai/youtube) + bubbletea shell~~
 3. ~~Local queue/session restore~~ (download cache still open)
-4. mpv filter config: ~~normalization~~, ~~sleep timer~~, EQ, tempo/pitch, silence-skip
+4. mpv filter config: ~~normalization~~, ~~sleep timer~~, ~~EQ~~, ~~tempo/pitch~~, ~~silence-skip~~
 5. ~~Lyrics via LRCLIB~~ (synced + plain)
 6. Python ytm-api: **login, library sync, quick picks** ← next major vertical
-7. True crossfade (mpv playlist `loadfile append` + gapless handoff; builds on stream URL preload)
+7. ~~True crossfade (mpv playlist `loadfile append` + gapless handoff; builds on stream URL preload)~~
 8. Offline download cache + local playback
 9. Playlist import/reorder, tempo/EQ UI polish
 

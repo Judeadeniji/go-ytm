@@ -76,6 +76,10 @@ func (m Model) snapshot() session.Snapshot {
 		Volume:           m.volume,
 		Muted:            m.muted,
 		Normalize:        m.normalize,
+		SilenceSkip:      m.silenceSkip,
+		Tempo:            m.tempo,
+		Pitch:            m.pitch,
+		EQPreset:         m.eqPreset,
 		Crossfade:        m.crossfade,
 		CrossfadeSec:     session.ClampCrossfadeSec(m.crossfadeSec),
 		WasPlaying:       false, // always restore paused; ignore prior play flag
@@ -175,12 +179,22 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	m.volume = vol
 	m.muted = snap.Muted
 	m.normalize = snap.Normalize
+	m.silenceSkip = snap.SilenceSkip
+	m.tempo = snap.Tempo
+	if m.tempo < 0.25 {
+		m.tempo = 1.0
+	}
+	m.pitch = snap.Pitch
+	m.eqPreset = snap.EQPreset
+	if m.eqPreset < 0 || m.eqPreset >= len(eqPresets) {
+		m.eqPreset = 0
+	}
 	m.crossfade = snap.Crossfade
 	m.crossfadeSec = session.ClampCrossfadeSec(snap.CrossfadeSec)
 	if m.crossfadeSec == 0 {
 		m.crossfadeSec = session.DefaultCrossfadeSec
 	}
-	applyVol := applyVolumeStateCmd(m.player, m.volume, m.muted, m.normalize)
+	applyVol := applyVolumeStateCmd(m.player, m.volume, m.muted, m.normalize, m.silenceSkip, m.tempo, m.pitch, eqPresets[m.eqPreset].Filter)
 
 	if len(snap.Queue) > 0 {
 		tracks := make([]Track, 0, len(snap.Queue))

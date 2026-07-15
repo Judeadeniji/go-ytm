@@ -167,14 +167,15 @@ func setMuteCmd(p *player.Player, mute bool) tea.Cmd {
 	}
 }
 
-func applyVolumeStateCmd(p *player.Player, volume float64, mute, normalize bool) tea.Cmd {
+func applyVolumeStateCmd(p *player.Player, volume float64, mute, normalize, silenceSkip bool, tempo, pitch float64, eqFilter string) tea.Cmd {
 	return func() tea.Msg {
 		if p == nil {
 			return nil
 		}
 		_ = p.SetVolume(volume)
 		_ = p.SetMute(mute)
-		_ = p.SetNormalize(normalize)
+		_ = p.SetTempo(tempo)
+		_ = p.SetAudioFilters(normalize, silenceSkip, pitch, eqFilter)
 		return nil
 	}
 }

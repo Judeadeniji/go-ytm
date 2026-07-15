@@ -91,6 +91,10 @@ type Model struct {
 	volume           float64 // 0–100 UI/mpv volume
 	muted            bool
 	normalize        bool      // loudnorm af
+	silenceSkip      bool      // silenceremove af
+	tempo            float64   // speed multiplier
+	pitch            float64   // pitch shift in semitones
+	eqPreset         int       // index into eqPresets
 	sleepUntil       time.Time // zero = sleep timer off
 	sleepMinutes     int       // last set duration in the cycle (0/15/30/45/60)
 	crossfade        bool      // gapless append + volume dip (off by default)
@@ -191,6 +195,8 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		statusMsg:         status,
 		queue:             Queue{current: -1},
 		volume:            100,
+		tempo:             1.0,
+		pitch:             0.0,
 		crossfadeSec:      session.DefaultCrossfadeSec,
 		sessionStore:      store,
 		lyricsFollow:      true,
@@ -419,12 +425,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.toggleMute()
 		case "o":
 			return m.toggleNormalize()
+		case "v":
+			return m.toggleSilenceSkip()
 		case "t":
 			return m.cycleSleepTimer()
 		case "x":
 			return m.toggleCrossfade()
 		case "X":
 			return m.cycleCrossfadeSec()
+		case "<":
+			return m.adjustTempo(-0.05)
+		case ">":
+			return m.adjustTempo(0.05)
+		case "{":
+			return m.adjustPitch(-0.5)
+		case "}":
+			return m.adjustPitch(0.5)
+		case "E":
+			return m.cycleEQPreset()
 		case ",":
 			if m.currentTrack != nil {
 				m.clearResumeSeek()

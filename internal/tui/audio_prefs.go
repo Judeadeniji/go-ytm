@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,13 +19,38 @@ func tickSleep() tea.Cmd {
 	})
 }
 
-func setNormalizeCmd(p *player.Player, on bool) tea.Cmd {
+type EQPreset struct {
+	Name   string
+	Filter string
+}
+
+var eqPresets = []EQPreset{
+	{"Flat", ""},
+	{"Bass Boost", "bass=g=8:f=110:w=0.6"},
+	{"Treble Boost", "treble=g=6:f=8000:w=0.5"},
+	{"V-Shape", "bass=g=6:f=100:w=0.5,treble=g=6:f=8000:w=0.5"},
+	{"Vocal", "bass=g=-2:f=100:w=0.5,treble=g=-2:f=8000:w=0.5"},
+}
+
+func setAudioFiltersCmd(p *player.Player, normalize, silenceSkip bool, pitch float64, eqFilter string) tea.Cmd {
 	return func() tea.Msg {
 		if p == nil {
 			return nil
 		}
-		if err := p.SetNormalize(on); err != nil {
-			return playerErrMsg{Op: "normalize", Err: err}
+		if err := p.SetAudioFilters(normalize, silenceSkip, pitch, eqFilter); err != nil {
+			return playerErrMsg{Op: "audio_filters", Err: err}
+		}
+		return nil
+	}
+}
+
+func setTempoCmd(p *player.Player, tempo float64) tea.Cmd {
+	return func() tea.Msg {
+		if p == nil {
+			return nil
+		}
+		if err := p.SetTempo(tempo); err != nil {
+			return playerErrMsg{Op: "tempo", Err: err}
 		}
 		return nil
 	}
@@ -51,7 +77,72 @@ func (m Model) toggleNormalize() (Model, tea.Cmd) {
 		m.statusMsg = "Loudness normalize off"
 	}
 	m.setQueuePanelContent()
-	return m, setNormalizeCmd(m.player, m.normalize)
+	return m, setAudioFiltersCmd(m.player, m.normalize, m.silenceSkip, m.pitch, eqPresets[m.eqPreset].Filter)
+}
+
+func (m Model) toggleSilenceSkip() (Model, tea.Cmd) {
+	m.silenceSkip = !m.silenceSkip
+	m.markSessionDirty()
+	if m.silenceSkip {
+		m.statusMsg = "Silence skip on"
+	} else {
+		m.statusMsg = "Silence skip off"
+	}
+	m.setQueuePanelContent()
+	return m, setAudioFiltersCmd(m.player, m.normalize, m.silenceSkip, m.pitch, eqPresets[m.eqPreset].Filter)
+}
+
+func (m Model) adjustTempo(delta float64) (Model, tea.Cmd) {
+	m.tempo += delta
+	m.tempo = math.Round(m.tempo*100) / 100
+	if m.tempo < 0.25 {
+		m.tempo = 0.25
+	}
+	if m.tempo > 4.0 {
+		m.tempo = 4.0
+	}
+	m.markSessionDirty()
+	m.statusMsg = fmt.Sprintf("Tempo · %.2fx", m.tempo)
+	m.setQueuePanelContent()
+	return m, setTempoCmd(m.player, m.tempo)
+}
+
+func (m Model) resetTempo() (Model, tea.Cmd) {
+	m.tempo = 1.0
+	m.markSessionDirty()
+	m.statusMsg = "Tempo · 1.00x"
+	m.setQueuePanelContent()
+	return m, setTempoCmd(m.player, m.tempo)
+}
+
+func (m Model) adjustPitch(delta float64) (Model, tea.Cmd) {
+	m.pitch += delta
+	if m.pitch < -12 {
+		m.pitch = -12
+	}
+	if m.pitch > 12 {
+		m.pitch = 12
+	}
+	m.markSessionDirty()
+	m.statusMsg = fmt.Sprintf("Pitch · %+.1f semi", m.pitch)
+	m.setQueuePanelContent()
+	return m, setAudioFiltersCmd(m.player, m.normalize, m.silenceSkip, m.pitch, eqPresets[m.eqPreset].Filter)
+}
+
+func (m Model) resetPitch() (Model, tea.Cmd) {
+	m.pitch = 0
+	m.markSessionDirty()
+	m.statusMsg = "Pitch · +0.0 semi"
+	m.setQueuePanelContent()
+	return m, setAudioFiltersCmd(m.player, m.normalize, m.silenceSkip, m.pitch, eqPresets[m.eqPreset].Filter)
+}
+
+func (m Model) cycleEQPreset() (Model, tea.Cmd) {
+	m.eqPreset = (m.eqPreset + 1) % len(eqPresets)
+	m.markSessionDirty()
+	m.statusMsg = fmt.Sprintf("EQ · %s", eqPresets[m.eqPreset].Name)
+	m.setQueuePanelContent()
+	return m, setAudioFiltersCmd(m.player, m.normalize, m.silenceSkip, m.pitch, eqPresets[m.eqPreset].Filter)
 }
 
 // cycleSleepTimer steps Off → 15 → 30 → 45 → 60 → Off.

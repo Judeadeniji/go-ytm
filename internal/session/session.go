@@ -42,6 +42,10 @@ type Snapshot struct {
 	Volume           float64   `json:"volume"`
 	Muted            bool      `json:"muted"`
 	Normalize        bool      `json:"normalize"`
+	SilenceSkip      bool      `json:"silenceSkip"`
+	Tempo            float64   `json:"tempo"`
+	Pitch            float64   `json:"pitch"`
+	EQPreset         int       `json:"eqPreset"`
 	Crossfade        bool      `json:"crossfade"`
 	CrossfadeSec     int       `json:"crossfadeSec"`
 	WasPlaying       bool      `json:"wasPlaying"`
