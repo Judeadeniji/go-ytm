@@ -2,10 +2,12 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/judeadeniji/go-ytm/internal/lyrics"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
@@ -47,17 +49,54 @@ func playTrack(ext *search.Extractor, t Track, gen int, ctx context.Context) tea
 }
 
 // loadTrack loads a resolved URL into mpv and signals TrackStartedMsg.
-func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64) tea.Cmd {
+// When seekTo > 0, uses loadfile start= and retries an absolute seek so
+// session resume doesn't land at 0:00 on HTTP streams.
+// ctx cancels mid-retry seeks when the user skips (playCancel).
+func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		if err := p.Load(url); err != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var err error
+		if seekTo >= 0.5 {
+			err = p.LoadAt(url, seekTo)
+		} else {
+			err = p.Load(url)
+		}
+		if err != nil {
 			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
 		if err := p.Play(); err != nil {
 			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
 		var seekErr error
-		if seekTo > 1 {
+		if seekTo >= 0.5 {
+			// Streams often ignore start= until demuxer settles — nudge a few times.
 			seekErr = p.SeekAbsolute(seekTo)
+			for i := 0; i < 4 && seekErr != nil; i++ {
+				select {
+				case <-ctx.Done():
+					return TrackStartedMsg{Track: t, Gen: gen, Err: ctx.Err(), SeekOnlyErr: true}
+				case <-time.After(150 * time.Millisecond):
+				}
+				if err := ctx.Err(); err != nil {
+					return TrackStartedMsg{Track: t, Gen: gen, Err: err, SeekOnlyErr: true}
+				}
+				seekErr = p.SeekAbsolute(seekTo)
+			}
+			if seekErr == nil {
+				select {
+				case <-ctx.Done():
+					return TrackStartedMsg{Track: t, Gen: gen, Err: ctx.Err(), SeekOnlyErr: true}
+				case <-time.After(100 * time.Millisecond):
+				}
+				if err := ctx.Err(); err != nil {
+					return TrackStartedMsg{Track: t, Gen: gen, Err: err, SeekOnlyErr: true}
+				}
+				if pos, perr := p.PositionSeconds(); perr == nil && pos+2 < seekTo {
+					_ = p.SeekAbsolute(seekTo)
+				}
+			}
 		}
 		return TrackStartedMsg{Track: t, Gen: gen, Err: seekErr, SeekOnlyErr: seekErr != nil}
 	}
@@ -115,6 +154,60 @@ func seekAbsoluteCmd(p *player.Player, seconds float64) tea.Cmd {
 			return playerErrMsg{Op: "seek", Err: err}
 		}
 		return nil
+	}
+}
+
+// LyricsMsg is the async result of an LRCLIB lyrics fetch.
+type LyricsMsg struct {
+	Gen          int
+	TrackKey     string
+	Instrumental bool
+	Plain        string
+	Lines        []lyrics.Line
+	Err          error
+}
+
+// SongDetailsMsg is the async result of a get_song metadata fetch.
+type SongDetailsMsg struct {
+	Gen     int
+	VideoID string
+	Song    *ytmapi.SongDetails
+	Err     error
+}
+
+func fetchSongDetails(api *ytmapi.Client, videoID string, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		if api == nil || videoID == "" {
+			return SongDetailsMsg{Gen: gen, VideoID: videoID, Err: fmt.Errorf("unavailable")}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		song, err := api.GetSong(ctx, videoID)
+		return SongDetailsMsg{Gen: gen, VideoID: videoID, Song: song, Err: err}
+	}
+}
+
+func fetchLyrics(client *lyrics.Client, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return LyricsMsg{Gen: gen, TrackKey: trackKey, Err: fmt.Errorf("lyrics unavailable")}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		res, err := client.FetchForTrack(ctx, title, artist, album, durationSec)
+		if err != nil {
+			return LyricsMsg{Gen: gen, TrackKey: trackKey, Err: err}
+		}
+		return LyricsMsg{
+			Gen:          gen,
+			TrackKey:     trackKey,
+			Instrumental: res.Instrumental,
+			Plain:        res.Plain,
+			Lines:        res.Lines,
+			Err:          nil,
+		}
 	}
 }
 

@@ -2,10 +2,15 @@ package tui
 
 // Track represents a playable audio track.
 type Track struct {
-	VideoID      string
-	Title        string
-	Artist       string
-	ThumbnailURL string
+	VideoID        string
+	Title          string
+	Artist         string
+	ArtistID       string // channel / browse id when known
+	Album          string
+	AlbumID        string // album browse id when known
+	Duration       string // display duration from API (e.g. "3:07")
+	ThumbnailURL   string
+	IsExplicit     bool
 }
 
 // Queue manages an ordered list of tracks with a current-position pointer.

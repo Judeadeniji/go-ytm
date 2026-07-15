@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	runewidth "github.com/mattn/go-runewidth"
+	"github.com/judeadeniji/go-ytm/internal/lyrics"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
 	"github.com/judeadeniji/go-ytm/internal/tui"
@@ -32,8 +33,9 @@ func main() {
 
 	ext := search.NewExtractor()
 	apiClient := ytmapi.NewClient()
+	lyricsClient := lyrics.NewClient()
 
-	m := tui.NewModel(p, ext, apiClient)
+	m := tui.NewModel(p, ext, apiClient, lyricsClient)
 	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := prog.Run(); err != nil {

@@ -56,6 +56,7 @@ func (m *Model) applyLayout() {
 	if right > 0 {
 		m.setQueuePanelContent()
 	}
+	m.ensureNowPlayingLayout()
 }
 
 func (m Model) beginOpen(status string) Model {
@@ -206,6 +207,8 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	m.cancelPlayExtract()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.playCancel = cancel
+	m.playCtx = ctx
+	sideCmd := m.onTrackChanged()
 	m.queueCursor = m.queue.CurrentIndex()
 	m.statusMsg = "Loading: " + t.Title
 	if m.onTracklistScreen() {
@@ -220,6 +223,7 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	cmds := []tea.Cmd{
 		playTrack(m.extractor, t, gen, ctx),
 		m.enqueueVisibleImages(m.mainWidth()),
+		sideCmd,
 	}
 	if seedWatch {
 		cmds = append(cmds, fetchWatch(m.ytmapiClient, t.VideoID, watchPlaylistID, false, gen))
@@ -235,14 +239,22 @@ func (m Model) togglePlayPause() (Model, tea.Cmd) {
 	// Restored session: queue remembers the track but mpv hasn't loaded it yet.
 	if !m.audioLoaded {
 		t := *m.currentTrack
-		m.resumeSeek = m.playPos
+		// Prefer an explicit resumeSeek (from snapshot); fall back to playPos.
+		if m.resumeSeek < 0.5 && m.playPos >= 0.5 {
+			m.resumeSeek = m.playPos
+		}
 		m.isPlaying = true
 		m.playGen++
 		gen := m.playGen
 		m.cancelPlayExtract()
 		ctx, cancel := context.WithCancel(context.Background())
 		m.playCancel = cancel
-		m.statusMsg = "Resuming: " + t.Title
+		m.playCtx = ctx
+		if m.resumeSeek >= 0.5 {
+			m.statusMsg = fmt.Sprintf("Resuming at %s: %s", formatClock(m.resumeSeek), t.Title)
+		} else {
+			m.statusMsg = "Resuming: " + t.Title
+		}
 		m.markSessionDirty()
 		if m.onTracklistScreen() {
 			m.setMainContent()
@@ -258,11 +270,17 @@ func (m Model) togglePlayPause() (Model, tea.Cmd) {
 }
 
 func trackFromAPI(tr ytmapi.TrackItem) Track {
+	album, albumID := ytmapi.AlbumRef(tr.Album)
 	return Track{
 		VideoID:      tr.VideoID,
 		Title:        tr.Title,
 		Artist:       tr.ArtistName(),
+		ArtistID:     tr.ArtistChannelID(),
+		Album:        album,
+		AlbumID:      albumID,
+		Duration:     tr.DurationLabel(),
 		ThumbnailURL: tr.ThumbURL(),
+		IsExplicit:   tr.IsExplicit,
 	}
 }
 

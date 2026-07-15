@@ -16,8 +16,39 @@ func (m Model) View() string {
 		return "Terminal too small"
 	}
 
-	left, mainWidth, right := m.layoutWidths()
 	contentHeight := m.contentHeight()
+	playerBar := m.generatePlayerBar(m.width)
+	left, mainWidth, right := m.layoutWidths()
+
+	// Now playing mode: replace left/header/center chrome, keep queue rail + player bar.
+	if m.nowPlayingOpen {
+		npWidth := m.width
+		if right > 0 {
+			npWidth = m.width - right
+		}
+		npBody := lipgloss.NewStyle().
+			Width(npWidth).Height(contentHeight).MaxHeight(contentHeight).
+			Background(colorBg).
+			Render(m.generateNowPlayingBody(npWidth, contentHeight))
+		parts := []string{npBody}
+		if right > 0 {
+			border := lipgloss.NewStyle().
+				Foreground(colorDivider).
+				Background(colorBg).
+				Height(contentHeight).
+				Render("│")
+			innerW := right - 1
+			if innerW < 1 {
+				innerW = 1
+			}
+			queuePane := lipgloss.NewStyle().
+				Width(innerW).Height(contentHeight).MaxHeight(contentHeight).
+				Render(safeViewportView(&m.rightViewport))
+			parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, border, queuePane))
+		}
+		body := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+		return m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))
+	}
 
 	// ========================
 	// 1. LEFT SIDEBAR
@@ -125,7 +156,5 @@ func (m Model) View() string {
 	}
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	playerBar := m.generatePlayerBar(m.width)
-
 	return m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))
 }

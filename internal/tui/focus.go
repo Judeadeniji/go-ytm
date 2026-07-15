@@ -111,7 +111,19 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 		return m, true
 
 	case PaneQueue:
-		if !m.showQueuePanel() || m.queue.IsEmpty() {
+		if !m.showQueuePanel() {
+			return m, false
+		}
+		// Details (and future inspector tabs) scroll as a document, not a track list.
+		if m.railTab != RailQueue {
+			if delta < 0 {
+				m.rightViewport.LineUp(1)
+			} else {
+				m.rightViewport.LineDown(1)
+			}
+			return m, true
+		}
+		if m.queue.IsEmpty() {
 			return m, false
 		}
 		m.queueCursor = clampIndex(m.queueCursor+delta, m.queue.Len())
@@ -265,7 +277,7 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 		return m, nil
 
 	case PaneQueue:
-		if !m.showQueuePanel() {
+		if !m.showQueuePanel() || m.railTab != RailQueue {
 			return m, nil
 		}
 		return m.playQueueIndex(m.queueCursor)

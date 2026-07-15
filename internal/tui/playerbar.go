@@ -98,6 +98,7 @@ func (m Model) generatePlayerBar(width int) string {
 		} else {
 			trackInfo = infoStyle.Render(title)
 		}
+		trackInfo = m.zone.Mark("player_nowplaying", trackInfo)
 	} else {
 		trackInfo = lipgloss.NewStyle().
 			Foreground(colorSubtext).
@@ -119,6 +120,9 @@ func (m Model) generatePlayerBar(width int) string {
 			Bold(true).
 			MaxWidth(budget).
 			Render(trackLabel(m.currentTrack))
+		if m.currentTrack != nil {
+			trunc = m.zone.Mark("player_nowplaying", trunc)
+		}
 		middleLeft = lipgloss.JoinHorizontal(lipgloss.Center, controls, gap, trunc)
 		middlePad = width - lipgloss.Width(middleLeft)
 		if middlePad < 0 {
@@ -173,7 +177,7 @@ func (m Model) generatePlayerBar(width int) string {
 	hints := lipgloss.NewStyle().
 		Foreground(colorSubtext).
 		Background(colorBg).
-		Render("j/k move  ·  enter play  ·  drag/click bar seek  ·  ,/. seek  ·  \\ queue")
+		Render("f stage  ·  ]/[ rail  ·  drag bar  ·  ,/. seek  ·  \\ hide rail")
 	hintsPad := width - lipgloss.Width(hints)
 	if hintsPad < 0 {
 		hintsPad = 0
@@ -184,7 +188,7 @@ func (m Model) generatePlayerBar(width int) string {
 }
 
 // handleProgressScrub handles click and drag seeking on the progress bar.
-// click (press+release) and drag both seek via absolute position.
+// Press/drag only previews scrubPos in the UI; audio seeks on release.
 func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	if m.currentTrack == nil || m.playDuration <= 0 || !m.audioLoaded {
 		if m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease) {
@@ -204,14 +208,12 @@ func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		}
 		m.scrubbing = true
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
-		m.playPos = m.scrubPos
-		return m, tea.Batch(seekAbsoluteCmd(m.player, m.scrubPos), fetchPlayProgress(m.player)), true
+		return m, nil, true
 
 	case m.scrubbing && (msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion):
-		// Keep scrubbing even if the cursor leaves the bar vertically.
+		// Preview only — keep scrubbing even if the cursor leaves the bar.
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
-		m.playPos = m.scrubPos
-		return m, tea.Batch(seekAbsoluteCmd(m.player, m.scrubPos), fetchPlayProgress(m.player)), true
+		return m, nil, true
 
 	case m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease):
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)

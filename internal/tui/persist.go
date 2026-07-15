@@ -74,7 +74,12 @@ func (m Model) snapshot() session.Snapshot {
 			VideoID:      t.VideoID,
 			Title:        t.Title,
 			Artist:       t.Artist,
+			ArtistID:     t.ArtistID,
+			Album:        t.Album,
+			AlbumID:      t.AlbumID,
+			Duration:     t.Duration,
 			ThumbnailURL: t.ThumbnailURL,
+			IsExplicit:   t.IsExplicit,
 		})
 	}
 	for _, sc := range m.stack.Items() {
@@ -144,7 +149,12 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 				VideoID:      t.VideoID,
 				Title:        t.Title,
 				Artist:       t.Artist,
+				ArtistID:     t.ArtistID,
+				Album:        t.Album,
+				AlbumID:      t.AlbumID,
+				Duration:     t.Duration,
 				ThumbnailURL: t.ThumbnailURL,
+				IsExplicit:   t.IsExplicit,
 			})
 		}
 		m.queue.SetFrom(tracks, 0)
