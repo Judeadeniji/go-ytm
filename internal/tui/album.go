@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -37,7 +36,9 @@ func (m Model) generateAlbumContent(mainWidth int) string {
 		metaParts = append(metaParts, a.Year)
 	}
 	if a.TrackCount > 0 {
-		metaParts = append(metaParts, fmt.Sprintf("%d tracks", a.TrackCount))
+		metaParts = append(metaParts, pluralCount(a.TrackCount, "track", "tracks"))
+	} else if n := len(tracks); n > 0 {
+		metaParts = append(metaParts, pluralCount(n, "track", "tracks"))
 	}
 	if a.Duration != "" {
 		metaParts = append(metaParts, a.Duration)

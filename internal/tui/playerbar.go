@@ -349,6 +349,14 @@ func formatClock(seconds float64) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
+// pluralCount formats "1 track" / "12 tracks" (or any singular/plural pair).
+func pluralCount(n int, singular, plural string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %s", n, plural)
+}
+
 // audioPending is true when a track is selected but mpv has not loaded it yet
 // (session restore / between extracts).
 func (m Model) audioPending() bool {

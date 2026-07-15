@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -324,7 +325,11 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 				subParts = append(subParts, ytmapi.FormatCount(res.Views)+" plays")
 			}
 			if res.ItemCount != "" {
-				subParts = append(subParts, res.ItemCount+" tracks")
+				if n, err := strconv.Atoi(strings.TrimSpace(res.ItemCount)); err == nil {
+					subParts = append(subParts, pluralCount(n, "track", "tracks"))
+				} else {
+					subParts = append(subParts, res.ItemCount+" tracks")
+				}
 			}
 
 			bg := colorBg

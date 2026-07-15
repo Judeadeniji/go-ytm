@@ -75,11 +75,15 @@ func firstThumbURL(thumbs []ytmapi.Thumbnail) string {
 // renderTrackRow draws one full-width tracklist line with focus and now-playing state.
 // viewsW > 0 reserves a right-aligned views/plays column before duration.
 func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused bool, viewsW int) string {
-	playing := m.currentTrack != nil && m.currentTrack.VideoID == tr.VideoID
+	playing := m.currentTrack != nil && m.currentTrack.VideoID != "" && m.currentTrack.VideoID == tr.VideoID
 
 	bg := colorBg
-	if focused {
+	switch {
+	case focused:
 		bg = colorFocusBg
+	case playing:
+		// Keep the playing row visibly distinct even when the cursor is elsewhere.
+		bg = colorSearchBg
 	}
 
 	indicator := "  "
@@ -115,11 +119,13 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 	}
 
 	titleColor := colorText
+	numColor := colorSubtext
 	if playing {
 		titleColor = colorAccent
+		numColor = colorAccent
 	}
 
-	num := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(numW).Render(fmt.Sprintf("%d", i+1))
+	num := lipgloss.NewStyle().Foreground(numColor).Background(bg).Width(numW).Render(fmt.Sprintf("%d", i+1))
 	title := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(titleW).MaxWidth(titleW).Render(tr.Title)
 	artist := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(artistW).MaxWidth(artistW).Render(tr.ArtistName())
 	dur := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(durW).Align(lipgloss.Right).Render(tr.DurationLabel())

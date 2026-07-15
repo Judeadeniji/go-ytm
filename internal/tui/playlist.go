@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -30,9 +29,9 @@ func (m Model) generatePlaylistContent(mainWidth int) string {
 		metaParts = append(metaParts, author)
 	}
 	if p.TrackCount > 0 {
-		metaParts = append(metaParts, fmt.Sprintf("%d songs", p.TrackCount))
+		metaParts = append(metaParts, pluralCount(p.TrackCount, "song", "songs"))
 	} else if len(tracks) > 0 {
-		metaParts = append(metaParts, fmt.Sprintf("%d songs", len(tracks)))
+		metaParts = append(metaParts, pluralCount(len(tracks), "song", "songs"))
 	}
 	if p.Duration != "" {
 		metaParts = append(metaParts, p.Duration)

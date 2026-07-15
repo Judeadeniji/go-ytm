@@ -890,6 +890,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
+		m.ensureTrackCursorInView(10, 1)
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case PlaylistMsg:
 		if msg.Gen != 0 && msg.Gen != m.navGen {
@@ -914,6 +915,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
+		m.ensureTrackCursorInView(10, 1)
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case WatchMsg:
 		if msg.Gen != 0 && msg.Gen != m.playGen {
