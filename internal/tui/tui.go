@@ -89,8 +89,11 @@ type Model struct {
 	scrubPos         float64 // preview position while scrubbing
 	volume           float64 // 0–100 UI/mpv volume
 	muted            bool
-	queuePanelHidden bool    // user dismissed the right rail
-	playGen          int     // bumped on each play request; ignores stale extracts
+	normalize        bool      // loudnorm af
+	sleepUntil       time.Time // zero = sleep timer off
+	sleepMinutes     int       // last set duration in the cycle (0/15/30/45/60)
+	queuePanelHidden bool      // user dismissed the right rail
+	playGen          int       // bumped on each play request; ignores stale extracts
 	playCancel       context.CancelFunc
 	playCtx          context.Context
 	lastRailClockSec int // throttles rail rebuilds to once per displayed second
@@ -397,6 +400,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.adjustVolume(5)
 		case "m":
 			return m.toggleMute()
+		case "o":
+			return m.toggleNormalize()
+		case "t":
+			return m.cycleSleepTimer()
 		case ",":
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -677,6 +684,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Starting: " + msg.Track.Title
 		seekTo := m.resumeSeek
 		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen, seekTo, m.playCtx)
+	case sleepTickMsg:
+		return m.handleSleepTick()
 	case sessionLoadedMsg:
 		if msg.Err != nil {
 			m.statusMsg = "Session load failed"

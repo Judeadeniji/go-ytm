@@ -193,7 +193,13 @@ func (m Model) generatePlayerBar(width int) string {
 	hints := lipgloss.NewStyle().
 		Foreground(colorSubtext).
 		Background(colorBg).
-		Render("f stage  ·  a View Album  ·  -/= vol  ·  m mute  ·  ]/[ rail")
+		Render("f stage  ·  o norm  ·  t sleep  ·  a album  ·  -/= vol  ·  m mute")
+	if !m.sleepUntil.IsZero() {
+		hints = lipgloss.NewStyle().
+			Foreground(colorSubtext).
+			Background(colorBg).
+			Render(fmt.Sprintf("sleep %s  ·  o norm  ·  t cycle  ·  -/= vol  ·  m mute", m.sleepRemainingLabel()))
+	}
 	hintsPad := width - lipgloss.Width(hints)
 	if hintsPad < 0 {
 		hintsPad = 0

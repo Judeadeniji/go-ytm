@@ -75,6 +75,7 @@ func (m Model) snapshot() session.Snapshot {
 		PlayDuration:     dur,
 		Volume:           m.volume,
 		Muted:            m.muted,
+		Normalize:        m.normalize,
 		WasPlaying:       false, // always restore paused; ignore prior play flag
 		NowPlayingOpen:   m.nowPlayingOpen,
 		QueueIndex:       m.queue.CurrentIndex(),
@@ -171,7 +172,8 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	}
 	m.volume = vol
 	m.muted = snap.Muted
-	applyVol := applyVolumeStateCmd(m.player, m.volume, m.muted)
+	m.normalize = snap.Normalize
+	applyVol := applyVolumeStateCmd(m.player, m.volume, m.muted, m.normalize)
 
 	if len(snap.Queue) > 0 {
 		tracks := make([]Track, 0, len(snap.Queue))

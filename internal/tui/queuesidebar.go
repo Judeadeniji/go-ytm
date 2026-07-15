@@ -301,6 +301,17 @@ func (m Model) renderRailDetails(inner int) string {
 		Render(strings.Repeat("─", max(4, inner))))
 	sb.WriteString("\n\n")
 
+	normLabel := "Off"
+	if m.normalize {
+		normLabel = "On"
+	}
+	sb.WriteString(m.renderMetaRow(inner, "Norm", normLabel))
+	sb.WriteString(m.zone.Mark("rail_meta_norm", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("o toggle"))))
+	sb.WriteString("\n")
+	sb.WriteString(m.renderMetaRow(inner, "Sleep", m.sleepRemainingLabel()))
+	sb.WriteString(m.zone.Mark("rail_meta_sleep", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("t cycle"))))
+	sb.WriteString("\n\n")
+
 	sb.WriteString(m.renderMetaRow(inner, "Lyrics", m.lyricsStatusLabel()))
 	refresh := lipgloss.NewStyle().Foreground(colorSubtext).Render("↻ refresh")
 	sb.WriteString(m.zone.Mark("rail_meta_lyrics_refresh", pad(refresh)))
@@ -589,6 +600,14 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	}
 	if m.zone.Get("rail_meta_album").InBounds(msg) || m.zone.Get("rail_meta_view_album").InBounds(msg) {
 		mm, cmd := m.goToPlayingAlbum()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_norm").InBounds(msg) {
+		mm, cmd := m.toggleNormalize()
+		return mm, cmd, true
+	}
+	if m.zone.Get("rail_meta_sleep").InBounds(msg) {
+		mm, cmd := m.cycleSleepTimer()
 		return mm, cmd, true
 	}
 	if m.zone.Get("rail_meta_lyrics_refresh").InBounds(msg) {
