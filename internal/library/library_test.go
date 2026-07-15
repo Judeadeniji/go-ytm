@@ -24,6 +24,7 @@ func TestSaveLoadSessionRoundTrip(t *testing.T) {
 		PlayDuration:     210,
 		Volume:           65,
 		Muted:            true,
+		Normalize:        true,
 		WasPlaying:       true,
 		NowPlayingOpen:   true,
 		QueueIndex:       1,
@@ -56,7 +57,7 @@ func TestSaveLoadSessionRoundTrip(t *testing.T) {
 	if out.PlayDuration != 210 || !out.WasPlaying || !out.NowPlayingOpen {
 		t.Fatalf("resume ui fields: %#v", out)
 	}
-	if out.Volume != 65 || !out.Muted {
+	if out.Volume != 65 || !out.Muted || !out.Normalize {
 		t.Fatalf("volume fields: %#v", out)
 	}
 }

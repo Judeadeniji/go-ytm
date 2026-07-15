@@ -542,3 +542,14 @@ func (p *Player) SetMute(mute bool) error {
 func (p *Player) ToggleMute() error {
 	return p.sendCommand("cycle", "mute")
 }
+
+// loudnormFilter is a practical one-pass loudness target for headphones.
+const loudnormFilter = "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+// SetNormalize enables or disables EBU R128 loudness normalization via mpv af.
+func (p *Player) SetNormalize(on bool) error {
+	if on {
+		return p.sendCommand("set_property", "af", loudnormFilter)
+	}
+	return p.sendCommand("set_property", "af", "")
+}

@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -220,6 +220,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 				return fmt.Errorf("migrate v4: %w", err)
 			}
 		}
+		ver = 4
+	}
+
+	if ver < 5 {
+		alters := []string{
+			`ALTER TABLE session ADD COLUMN normalize INTEGER NOT NULL DEFAULT 0`,
+			`INSERT INTO schema_migrations(version) VALUES (5)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v5: %w", err)
+			}
+		}
 	}
 
 	return tx.Commit()
@@ -272,19 +285,21 @@ func (db *DB) LoadSession() (*session.Snapshot, error) {
 
 	var snap session.Snapshot
 	var hidden, showSearch int
-	var muted, wasPlaying, nowPlaying int
+	var muted, wasPlaying, nowPlaying, normalize int
 	err := db.sql.QueryRow(`
 SELECT active_menu, queue_panel_hidden, search_filter, last_search_query,
        active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
        play_pos, queue_index, show_search,
        COALESCE(volume, 100), COALESCE(muted, 0),
-       COALESCE(play_duration, 0), COALESCE(was_playing, 0), COALESCE(now_playing_open, 0)
+       COALESCE(play_duration, 0), COALESCE(was_playing, 0), COALESCE(now_playing_open, 0),
+       COALESCE(normalize, 0)
 FROM session WHERE id = 1`).Scan(
 		&snap.ActiveMenu, &hidden, &snap.SearchFilter, &snap.LastSearchQuery,
 		&snap.ActiveCarousel, &snap.HomeCardCursor, &snap.TrackCursor, &snap.ListCursor, &snap.QueueCursor,
 		&snap.PlayPos, &snap.QueueIndex, &showSearch,
 		&snap.Volume, &muted,
 		&snap.PlayDuration, &wasPlaying, &nowPlaying,
+		&normalize,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -298,6 +313,7 @@ FROM session WHERE id = 1`).Scan(
 	snap.Muted = muted != 0
 	snap.WasPlaying = wasPlaying != 0
 	snap.NowPlayingOpen = nowPlaying != 0
+	snap.Normalize = normalize != 0
 	if snap.Volume < 0 {
 		snap.Volume = 0
 	}
@@ -363,7 +379,7 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	}
 	defer tx.Rollback()
 
-	hidden, showSearch, muted, wasPlaying, nowPlaying := 0, 0, 0, 0, 0
+	hidden, showSearch, muted, wasPlaying, nowPlaying, normalize := 0, 0, 0, 0, 0, 0
 	if snap.QueuePanelHidden {
 		hidden = 1
 	}
@@ -379,6 +395,9 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	if snap.NowPlayingOpen {
 		nowPlaying = 1
 	}
+	if snap.Normalize {
+		normalize = 1
+	}
 	vol := snap.Volume
 	if vol < 0 {
 		vol = 0
@@ -392,12 +411,12 @@ INSERT INTO session (
   id, active_menu, queue_panel_hidden, search_filter, last_search_query,
   active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
   play_pos, queue_index, show_search, volume, muted,
-  play_duration, was_playing, now_playing_open, updated_at
+  play_duration, was_playing, now_playing_open, normalize, updated_at
 ) VALUES (
   1, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
-  ?, ?, ?, datetime('now')
+  ?, ?, ?, ?, datetime('now')
 )
 ON CONFLICT(id) DO UPDATE SET
   active_menu=excluded.active_menu,
@@ -417,11 +436,12 @@ ON CONFLICT(id) DO UPDATE SET
   play_duration=excluded.play_duration,
   was_playing=excluded.was_playing,
   now_playing_open=excluded.now_playing_open,
+  normalize=excluded.normalize,
   updated_at=datetime('now')
 `, snap.ActiveMenu, hidden, snap.SearchFilter, snap.LastSearchQuery,
 		snap.ActiveCarousel, snap.HomeCardCursor, snap.TrackCursor, snap.ListCursor, snap.QueueCursor,
 		snap.PlayPos, snap.QueueIndex, showSearch, vol, muted,
-		snap.PlayDuration, wasPlaying, nowPlaying); err != nil {
+		snap.PlayDuration, wasPlaying, nowPlaying, normalize); err != nil {
 		return err
 	}
 

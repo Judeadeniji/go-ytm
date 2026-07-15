@@ -41,6 +41,7 @@ type Snapshot struct {
 	PlayDuration     float64   `json:"playDuration"`
 	Volume           float64   `json:"volume"`
 	Muted            bool      `json:"muted"`
+	Normalize        bool      `json:"normalize"`
 	WasPlaying       bool      `json:"wasPlaying"`
 	NowPlayingOpen   bool      `json:"nowPlayingOpen"`
 	Queue            []Track   `json:"queue"`
