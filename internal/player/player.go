@@ -351,6 +351,34 @@ func (p *Player) DurationSeconds() (float64, error) {
 	return v, nil
 }
 
+// BufferedSeconds returns how far into the track media is cached (seconds),
+// suitable for a "bytes loaded" progress overlay. Prefers demuxer-cache-time;
+// falls back to time-pos + demuxer-cache-duration.
+func (p *Player) BufferedSeconds() (float64, error) {
+	if data, err := p.getProperty("demuxer-cache-time"); err == nil {
+		var v float64
+		if err := json.Unmarshal(data, &v); err == nil && v >= 0 {
+			return v, nil
+		}
+	}
+	pos, posErr := p.PositionSeconds()
+	if posErr != nil {
+		pos = 0
+	}
+	data, err := p.getProperty("demuxer-cache-duration")
+	if err != nil {
+		return pos, err
+	}
+	var ahead float64
+	if err := json.Unmarshal(data, &ahead); err != nil {
+		return pos, err
+	}
+	if ahead < 0 {
+		ahead = 0
+	}
+	return pos + ahead, nil
+}
+
 // Load replaces the current media with url (stops current playback first).
 func (p *Player) Load(url string) error {
 	return p.sendCommand("loadfile", url, "replace")
