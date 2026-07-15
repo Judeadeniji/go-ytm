@@ -308,6 +308,9 @@ func (m Model) renderRailDetails(inner int) string {
 	sb.WriteString(m.renderMetaRow(inner, "Norm", normLabel))
 	sb.WriteString(m.zone.Mark("rail_meta_norm", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("o toggle"))))
 	sb.WriteString("\n")
+	sb.WriteString(m.renderMetaRow(inner, "Crossfade", m.crossfadeSecLabel()))
+	sb.WriteString(m.zone.Mark("rail_meta_crossfade", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("x on/off · X duration"))))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMetaRow(inner, "Sleep", m.sleepRemainingLabel()))
 	sb.WriteString(m.zone.Mark("rail_meta_sleep", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("t cycle"))))
 	sb.WriteString("\n\n")
@@ -606,6 +609,10 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		mm, cmd := m.toggleNormalize()
 		return mm, cmd, true
 	}
+	if m.zone.Get("rail_meta_crossfade").InBounds(msg) {
+		mm, cmd := m.toggleCrossfade()
+		return mm, cmd, true
+	}
 	if m.zone.Get("rail_meta_sleep").InBounds(msg) {
 		mm, cmd := m.cycleSleepTimer()
 		return mm, cmd, true
@@ -627,8 +634,9 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	if m.zone.Get("rail_meta_clear_upcoming").InBounds(msg) {
 		m.queue.TruncateAfterCurrent()
 		m.markSessionDirty()
-		m.setQueuePanelContent()
-		return m, nil, true
+		mm, cmd := m.invalidateArmedIfNextChanged()
+		mm.setQueuePanelContent()
+		return mm, cmd, true
 	}
 	return m, nil, false
 }

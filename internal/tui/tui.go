@@ -15,6 +15,7 @@ import (
 	"github.com/judeadeniji/go-ytm/internal/lyrics"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
+	"github.com/judeadeniji/go-ytm/internal/session"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 	zone "github.com/lrstanley/bubblezone"
 )
@@ -92,8 +93,17 @@ type Model struct {
 	normalize        bool      // loudnorm af
 	sleepUntil       time.Time // zero = sleep timer off
 	sleepMinutes     int       // last set duration in the cycle (0/15/30/45/60)
-	queuePanelHidden bool      // user dismissed the right rail
-	playGen          int       // bumped on each play request; ignores stale extracts
+	crossfade        bool      // gapless append + volume dip (off by default)
+	crossfadeSec     int       // fade/handoff window seconds
+	armedVideoID     string    // next track appended into mpv playlist
+	armInflight      string    // video id currently being appended
+	crossfadeFading  bool      // volume dip in progress
+	streamCache      map[string]cachedStream
+	preloadInflight  map[string]struct{}
+	preloadCancel    map[string]context.CancelFunc
+	lastStreamCached bool // current load used a prefetched URL (retry-extract on fail)
+	queuePanelHidden bool // user dismissed the right rail
+	playGen          int  // bumped on each play request; ignores stale extracts
 	playCancel       context.CancelFunc
 	playCtx          context.Context
 	lastRailClockSec int // throttles rail rebuilds to once per displayed second
@@ -181,9 +191,13 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		statusMsg:         status,
 		queue:             Queue{current: -1},
 		volume:            100,
+		crossfadeSec:      session.DefaultCrossfadeSec,
 		sessionStore:      store,
 		lyricsFollow:      true,
 		lyricsCursor:      -1,
+		streamCache:       make(map[string]cachedStream),
+		preloadInflight:   make(map[string]struct{}),
+		preloadCancel:     make(map[string]context.CancelFunc),
 	}
 }
 
@@ -244,6 +258,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.cancelPlayExtract()
+			m.cancelAllPrefetches()
 			m.cancelSuggestions()
 			m.cancelLyrics()
 			m.cancelSongDetails()
@@ -354,6 +369,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			m.playGen++
 			m.cancelPlayExtract()
+			m.cancelAllPrefetches()
+			m.lastStreamCached = false
 			m.statusMsg = "Stopped playback"
 			m.isPlaying = false
 			m.audioLoaded = false
@@ -404,6 +421,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.toggleNormalize()
 		case "t":
 			return m.cycleSleepTimer()
+		case "x":
+			return m.toggleCrossfade()
+		case "X":
+			return m.cycleCrossfadeSec()
 		case ",":
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -513,10 +534,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // superseded by a newer skip
 		}
 		if msg.Err != nil && !msg.SeekOnlyErr {
+			if m.lastStreamCached && msg.Track.VideoID != "" {
+				// Prefetched URL went stale — drop it and re-extract once.
+				m.invalidateStreamCache(msg.Track.VideoID)
+				m.lastStreamCached = false
+				m.statusMsg = "Retrying: " + msg.Track.Title
+				return m, tea.Sequence(
+					stopPlayback(m.player),
+					playTrack(m.extractor, msg.Track, m.playGen, m.playCtx),
+				)
+			}
 			m.isPlaying = false
 			m.audioLoaded = false
 			m.statusMsg = shortStreamErr(msg.Err)
 			return m, nil
+		}
+		m.lastStreamCached = false
+		if msg.URL != "" && msg.Track.VideoID != "" {
+			m.putStreamCache(msg.Track.VideoID, msg.URL)
 		}
 		m.currentTrack = &msg.Track
 		m.isPlaying = true
@@ -569,6 +604,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.nowPlayingOpen {
 			m.ensureNowPlayingLayout()
 			cmds = append(cmds, m.enqueueNowPlayingImage())
+		}
+		if cmd := m.ensureUpcomingPreloaded(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.ensureUpcomingArmed(); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
 	case SongDetailsMsg:
@@ -677,13 +718,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(msg.Err, context.Canceled) {
 				return m, nil
 			}
+			m.lastStreamCached = false
 			m.statusMsg = shortStreamErr(msg.Err)
 			m.isPlaying = false
 			return m, nil
 		}
+		m.lastStreamCached = msg.Cached
+		// Don't warm-cache until Load/Play succeeds (see TrackStartedMsg).
 		m.statusMsg = "Starting: " + msg.Track.Title
 		seekTo := m.resumeSeek
 		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen, seekTo, m.playCtx)
+	case streamPreloadMsg:
+		delete(m.preloadInflight, msg.VideoID)
+		delete(m.preloadCancel, msg.VideoID)
+		if msg.Err != nil {
+			if errors.Is(msg.Err, context.Canceled) {
+				return m, nil
+			}
+			return m, nil
+		}
+		if msg.URL == "" || !m.queueContainsVideo(msg.VideoID) {
+			return m, nil
+		}
+		m.putStreamCache(msg.VideoID, msg.URL)
+		return m, nil
 	case sleepTickMsg:
 		return m.handleSleepTick()
 	case sessionLoadedMsg:
@@ -742,6 +800,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Reason != "eof" {
 			return m, rearm
 		}
+		// Gapless: mpv already advanced to the appended next track.
+		if m.crossfade && m.armedVideoID != "" {
+			nextIdx := m.queue.CurrentIndex() + 1
+			if next, ok := m.queue.At(nextIdx); ok && next.VideoID == m.armedVideoID {
+				mm, cmd := m.promoteArmedTrack()
+				return mm, tea.Batch(cmd, rearm)
+			}
+		}
+		m.clearCrossfadeArmState()
 		mm, cmd := m.playNext()
 		if cmd == nil {
 			// End of queue
@@ -750,6 +817,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return mm, rearm
 		}
 		return mm, tea.Batch(cmd, rearm)
+	case streamArmMsg:
+		if msg.VideoID == "" {
+			return m, nil
+		}
+		if m.armInflight == msg.VideoID {
+			m.armInflight = ""
+		}
+		if msg.Err != nil {
+			m.invalidateStreamCache(msg.VideoID)
+			if m.armedVideoID == msg.VideoID {
+				m.armedVideoID = ""
+			}
+			return m, nil
+		}
+		// Only keep the arm if this is still the next queue item.
+		cur := m.queue.CurrentIndex()
+		next, ok := m.queue.At(cur + 1)
+		if !ok || next.VideoID != msg.VideoID {
+			return m, dropArmedPlaylistEntry(m.player)
+		}
+		m.armedVideoID = msg.VideoID
+		return m, nil
 	case playProgressTickMsg:
 		if m.currentTrack == nil {
 			return m, tickPlayProgress()
@@ -818,6 +907,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.nowPlayingOpen {
 				m.syncLyricsFollowOffset()
+			}
+			// Warm next stream URL(s) — ramps ahead when near track end.
+			if cmd := m.ensureUpcomingPreloaded(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if cmd := m.ensureUpcomingArmed(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if cmd := m.applyCrossfadeVolume(); cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 			return m, tea.Batch(cmds...)
 		}
@@ -1006,7 +1105,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.markSessionDirty()
 		m.applyLayout()
 		m.setQueuePanelContent()
-		return m, m.enqueueVisibleImages(m.mainWidth())
+		mm, disarm := m.invalidateArmedIfNextChanged()
+		return mm, tea.Batch(
+			mm.enqueueVisibleImages(mm.mainWidth()),
+			mm.ensureUpcomingPreloaded(),
+			mm.ensureUpcomingArmed(),
+			disarm,
+		)
 	case HomeMsg:
 		if msg.Err != nil {
 			m.statusMsg = fmt.Sprintf("Home error: %v", msg.Err)
@@ -1225,6 +1330,7 @@ func (m Model) playQueueIndex(i int) (Model, tea.Cmd) {
 }
 
 func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
+	m.clearCrossfadeArmState()
 	m.currentTrack = &t
 	m.isPlaying = true
 	m.audioLoaded = false
@@ -1250,15 +1356,17 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.applyLayout()
 	m.setQueuePanelContent()
 	m.markSessionDirty()
+	cachedURL, _ := m.peekStreamCache(t.VideoID)
+	batch := []tea.Cmd{
+		playTrackResolved(m.extractor, t, gen, ctx, cachedURL),
+		m.enqueueVisibleImages(m.mainWidth()),
+		sideCmd,
+	}
+	if warm := m.ensureUpcomingPreloaded(); warm != nil {
+		batch = append(batch, warm)
+	}
 	// Stop must finish before extract/load so a concurrent Stop can't kill the new track.
-	return m, tea.Sequence(
-		stopPlayback(m.player),
-		tea.Batch(
-			playTrack(m.extractor, t, gen, ctx),
-			m.enqueueVisibleImages(m.mainWidth()),
-			sideCmd,
-		),
-	)
+	return m, tea.Sequence(stopPlayback(m.player), tea.Batch(batch...))
 }
 
 func (m Model) nextPane() Pane {

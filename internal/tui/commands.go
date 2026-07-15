@@ -18,15 +18,17 @@ type TrackStartedMsg struct {
 	Track       Track
 	Gen         int
 	Err         error
-	SeekOnlyErr bool // Err is seek-only; playback already started
+	SeekOnlyErr bool   // Err is seek-only; playback already started
+	URL         string // stream URL used for Load (commit to warm cache after success)
 }
 
 // streamReadyMsg is the async result of resolving a stream URL for a play request.
 type streamReadyMsg struct {
-	Track Track
-	URL   string
-	Gen   int
-	Err   error
+	Track  Track
+	URL    string
+	Gen    int
+	Err    error
+	Cached bool // served from preload cache
 }
 
 func fetchStreamURL(ext *search.Extractor, videoID string) tea.Cmd {
@@ -60,6 +62,7 @@ func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, c
 		if err := ctx.Err(); err != nil {
 			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
+		_ = p.PlaylistClear()
 		if err := p.Load(url); err != nil {
 			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
@@ -74,10 +77,10 @@ func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, c
 			deadline := time.Now().Add(12 * time.Second)
 			seekErr = p.SeekUntil(ctx, seekTo, deadline)
 			if seekErr != nil && ctx.Err() != nil {
-				return TrackStartedMsg{Track: t, Gen: gen, Err: ctx.Err(), SeekOnlyErr: true}
+				return TrackStartedMsg{Track: t, Gen: gen, URL: url, Err: ctx.Err(), SeekOnlyErr: true}
 			}
 		}
-		return TrackStartedMsg{Track: t, Gen: gen, Err: seekErr, SeekOnlyErr: seekErr != nil}
+		return TrackStartedMsg{Track: t, Gen: gen, URL: url, Err: seekErr, SeekOnlyErr: seekErr != nil}
 	}
 }
 
@@ -232,6 +235,10 @@ func fetchLyrics(client *lyrics.Client, trackKey, title, artist, album string, d
 
 func stopPlayback(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
+		if p == nil {
+			return nil
+		}
+		_ = p.PlaylistClear()
 		if err := p.Stop(); err != nil {
 			return playerErrMsg{Op: "stop", Err: err}
 		}

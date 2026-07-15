@@ -322,6 +322,7 @@ func (m Model) playTracklistFrom(index int) (Model, tea.Cmd) {
 
 // beginPlay updates UI state and kicks off extraction for t (already selected in queue).
 func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model, tea.Cmd) {
+	m.clearCrossfadeArmState()
 	m.currentTrack = &t
 	m.isPlaying = true
 	m.audioLoaded = false
@@ -348,13 +349,17 @@ func (m Model) beginPlay(t Track, seedWatch bool, watchPlaylistID string) (Model
 	m.setQueuePanelContent()
 	m.markSessionDirty()
 
+	cachedURL, _ := m.peekStreamCache(t.VideoID)
 	cmds := []tea.Cmd{
-		playTrack(m.extractor, t, gen, ctx),
+		playTrackResolved(m.extractor, t, gen, ctx, cachedURL),
 		m.enqueueVisibleImages(m.mainWidth()),
 		sideCmd,
 	}
 	if seedWatch {
 		cmds = append(cmds, fetchWatch(m.ytmapiClient, t.VideoID, watchPlaylistID, false, gen))
+	}
+	if warm := m.ensureUpcomingPreloaded(); warm != nil {
+		cmds = append(cmds, warm)
 	}
 	// Stop must finish before extract/load so a concurrent Stop can't kill the new track.
 	return m, tea.Sequence(stopPlayback(m.player), tea.Batch(cmds...))

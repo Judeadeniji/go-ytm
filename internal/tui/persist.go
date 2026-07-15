@@ -76,6 +76,8 @@ func (m Model) snapshot() session.Snapshot {
 		Volume:           m.volume,
 		Muted:            m.muted,
 		Normalize:        m.normalize,
+		Crossfade:        m.crossfade,
+		CrossfadeSec:     session.ClampCrossfadeSec(m.crossfadeSec),
 		WasPlaying:       false, // always restore paused; ignore prior play flag
 		NowPlayingOpen:   m.nowPlayingOpen,
 		QueueIndex:       m.queue.CurrentIndex(),
@@ -173,6 +175,11 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	m.volume = vol
 	m.muted = snap.Muted
 	m.normalize = snap.Normalize
+	m.crossfade = snap.Crossfade
+	m.crossfadeSec = session.ClampCrossfadeSec(snap.CrossfadeSec)
+	if m.crossfadeSec == 0 {
+		m.crossfadeSec = session.DefaultCrossfadeSec
+	}
 	applyVol := applyVolumeStateCmd(m.player, m.volume, m.muted, m.normalize)
 
 	if len(snap.Queue) > 0 {
@@ -271,6 +278,7 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 	m.isPlaying = true
 	m.playGen++
 	gen := m.playGen
+	m.clearCrossfadeArmState()
 	m.cancelPlayExtract()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.playCancel = cancel
@@ -281,7 +289,12 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 		m.statusMsg = "Resuming: " + t.Title
 	}
 	// Match beginPlay: stop before extract/load so mpv can't race a stale loadfile.
-	return tea.Sequence(stopPlayback(m.player), playTrack(m.extractor, t, gen, ctx))
+	cachedURL, _ := m.peekStreamCache(t.VideoID)
+	cmds := []tea.Cmd{playTrackResolved(m.extractor, t, gen, ctx, cachedURL)}
+	if warm := m.ensureUpcomingPreloaded(); warm != nil {
+		cmds = append(cmds, warm)
+	}
+	return tea.Sequence(stopPlayback(m.player), tea.Batch(cmds...))
 }
 
 func (m *Model) clearResumeSeek() {
