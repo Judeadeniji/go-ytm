@@ -35,10 +35,16 @@ func (m Model) generateAlbumContent(mainWidth int) string {
 	if a.Year != "" {
 		metaParts = append(metaParts, a.Year)
 	}
-	if a.TrackCount > 0 {
-		metaParts = append(metaParts, pluralCount(a.TrackCount, "track", "tracks"))
-	} else if n := len(tracks); n > 0 {
-		metaParts = append(metaParts, pluralCount(n, "track", "tracks"))
+	countN := a.TrackCount
+	if countN <= 0 {
+		countN = len(tracks)
+	}
+	if countN > 0 {
+		unitSing, unitPlur := "track", "tracks"
+		if strings.EqualFold(badge, "Single") {
+			unitSing, unitPlur = "song", "songs"
+		}
+		metaParts = append(metaParts, pluralCount(countN, unitSing, unitPlur))
 	}
 	if a.Duration != "" {
 		metaParts = append(metaParts, a.Duration)

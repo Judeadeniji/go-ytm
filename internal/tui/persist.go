@@ -161,10 +161,8 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	m.nowPlayingOpen = snap.NowPlayingOpen
 
 	vol := snap.Volume
-	if vol <= 0 && !snap.Muted {
-		// Older sessions omitted volume; keep mpv default.
-		vol = 100
-	}
+	// Schema default is 100; omit/legacy only when volume was never written.
+	// Real mute-at-zero is preserved when Muted is true OR volume was explicitly saved.
 	if vol < 0 {
 		vol = 0
 	}
@@ -227,13 +225,14 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	if sc, ok := m.stack.Current(); ok && sc.ID != "" {
 		m.navGen++
 		m.pageLoading = true
+		ctx := m.startNavCtx()
 		switch sc.Kind {
 		case ScreenArtist:
-			cmds = append(cmds, fetchArtist(m.ytmapiClient, sc.ID, m.navGen))
+			cmds = append(cmds, fetchArtist(m.ytmapiClient, sc.ID, m.navGen, ctx))
 		case ScreenAlbum:
-			cmds = append(cmds, fetchAlbum(m.ytmapiClient, sc.ID, m.navGen))
+			cmds = append(cmds, fetchAlbum(m.ytmapiClient, sc.ID, m.navGen, ctx))
 		case ScreenPlaylist:
-			cmds = append(cmds, fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen))
+			cmds = append(cmds, fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen, ctx))
 		}
 		return tea.Batch(cmds...)
 	}
@@ -241,7 +240,12 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	if m.lastSearchQuery != "" && m.stack.IsHome() && snap.ShowSearch {
 		m.navGen++
 		m.pageLoading = true
-		cmds = append(cmds, doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen))
+		if m.lastSearchQuery != "" {
+			m.searchInput.SetValue(m.lastSearchQuery)
+			m.searchInput.Blur()
+		}
+		ctx := m.startNavCtx()
+		cmds = append(cmds, doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen, ctx))
 	}
 	return tea.Batch(cmds...)
 }
@@ -278,6 +282,22 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 	return tea.Sequence(stopPlayback(m.player), playTrack(m.extractor, t, gen, ctx))
 }
 
+func (m *Model) clearResumeSeek() {
+	m.resumeSeek = 0
+	m.resumeSeekTries = 0
+}
+
 func (m *Model) markSessionDirty() {
+	m.sessionDirty = true
+}
+
+// markPlayPosDirty marks the session dirty when the displayed second changes,
+// so we don't rewrite the full queue to SQLite on every 500ms progress tick.
+func (m *Model) markPlayPosDirty() {
+	sec := int(m.playPos)
+	if sec == m.lastSessionPosSec {
+		return
+	}
+	m.lastSessionPosSec = sec
 	m.sessionDirty = true
 }

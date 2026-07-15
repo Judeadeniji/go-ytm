@@ -580,8 +580,12 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		m.searchFilter = "artists"
 		m.statusMsg = "Searching artists: " + artist
 		m.markSessionDirty()
+		m.cancelNavFetch()
 		m.navGen++
-		return m, doSearchFiltered(m.ytmapiClient, artist, "artists", m.navGen), true
+		m.pageLoading = true
+		ctx := m.startNavCtx()
+		m.setMainContent()
+		return m, doSearchFiltered(m.ytmapiClient, artist, "artists", m.navGen, ctx), true
 	}
 	if m.zone.Get("rail_meta_album").InBounds(msg) || m.zone.Get("rail_meta_view_album").InBounds(msg) {
 		mm, cmd := m.goToPlayingAlbum()

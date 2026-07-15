@@ -185,27 +185,28 @@ func (m Model) buildSyncedLyricsContent(width int) (string, int) {
 		cursor = active
 	}
 
-	innerW := max(8, width)
+		innerW := max(8, width)
 	var sb strings.Builder
 	for i, ln := range m.lyricsLines {
 		text := ln.Text
 		if text == "" {
 			text = " "
 		}
-		style := lipgloss.NewStyle().Foreground(colorSubtext).Width(innerW).MaxWidth(innerW)
+		// MaxWidth truncates; avoid Width() which wraps and breaks YOffset↔line index.
+		style := lipgloss.NewStyle().Foreground(colorSubtext).MaxWidth(innerW)
 		prefix := "  "
 		switch {
 		case i == active && i == cursor:
-			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Width(innerW).MaxWidth(innerW)
+			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).MaxWidth(innerW)
 			prefix = "▶ "
 		case i == active:
-			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Width(innerW).MaxWidth(innerW)
+			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).MaxWidth(innerW)
 			prefix = "● "
 		case i == cursor:
-			style = lipgloss.NewStyle().Foreground(colorText).Bold(true).Width(innerW).MaxWidth(innerW)
+			style = lipgloss.NewStyle().Foreground(colorText).Bold(true).MaxWidth(innerW)
 			prefix = "› "
 		case active >= 0 && absInt(i-active) == 1:
-			style = lipgloss.NewStyle().Foreground(colorText).Width(innerW).MaxWidth(innerW)
+			style = lipgloss.NewStyle().Foreground(colorText).MaxWidth(innerW)
 		}
 		row := style.Render(prefix + text)
 		sb.WriteString(m.zone.Mark(fmt.Sprintf("lyrics_line_%d", i), row))
@@ -375,6 +376,7 @@ func (m Model) seekToLyricsLine(i int) (Model, tea.Cmd) {
 	// Jumping to a line is an intentional "go here" — resume follow from that point.
 	m.lyricsFollow = true
 	m.lyricsIdleAt = time.Time{}
+	m.clearResumeSeek()
 	m.applyLyricsFollowOffset()
 	m.statusMsg = fmt.Sprintf("Seek %s", formatClock(sec))
 	return m, tea.Batch(seekAbsoluteCmd(m.player, sec), fetchPlayProgress(m.player))
@@ -421,24 +423,13 @@ func (m Model) handleLyricsWheel(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	return m, cmd, true
 }
 
-// mouseOverLyrics reports whether the mouse is over the lyrics viewport (or
-// the NP body if the zone isn't registered yet).
+// mouseOverLyrics reports whether the mouse is over the lyrics viewport.
 func (m Model) mouseOverLyrics(msg tea.MouseMsg) bool {
-	if z := m.zone.Get("lyrics_pane"); z != nil && !z.IsZero() {
-		return z.InBounds(msg)
-	}
-	if !m.nowPlayingOpen {
+	z := m.zone.Get("lyrics_pane")
+	if z == nil || z.IsZero() {
 		return false
 	}
-	barTop := m.height - playerBarHeight
-	if m.height > 0 && msg.Y >= barTop {
-		return false
-	}
-	_, _, right := m.layoutWidths()
-	if right > 0 && msg.X >= m.width-right {
-		return false
-	}
-	return true
+	return z.InBounds(msg)
 }
 
 // hydrateLyricsViewport pushes lyrics content + size onto Model.lyricsViewport

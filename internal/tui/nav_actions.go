@@ -60,7 +60,11 @@ func (m *Model) applyLayout() {
 }
 
 func (m Model) beginOpen(status string) Model {
+	m.cancelNavFetch()
 	m.navGen++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.navCancel = cancel
+	m.navCtx = ctx
 	m.pageLoading = true
 	m.pageErr = ""
 	m.statusMsg = status
@@ -69,28 +73,32 @@ func (m Model) beginOpen(status string) Model {
 }
 
 func (m Model) beginSearch(query string) (Model, tea.Cmd) {
+	m.cancelNavFetch()
 	m.navGen++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.navCancel = cancel
+	m.navCtx = ctx
 	m.pageLoading = true
 	m.pageErr = ""
 	m.lastSearchQuery = query
 	m.statusMsg = "Searching…"
 	m.setMainContent()
-	return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter, m.navGen)
+	return m, doSearchFiltered(m.ytmapiClient, query, m.searchFilter, m.navGen, ctx)
 }
 
 func (m Model) openArtist(channelID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading artist…")
-	return m, fetchArtist(m.ytmapiClient, channelID, m.navGen)
+	return m, fetchArtist(m.ytmapiClient, channelID, m.navGen, m.navCtx)
 }
 
 func (m Model) openAlbum(browseID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading album…")
-	return m, fetchAlbum(m.ytmapiClient, browseID, m.navGen)
+	return m, fetchAlbum(m.ytmapiClient, browseID, m.navGen, m.navCtx)
 }
 
 func (m Model) openOlak(audioPlaylistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading album…")
-	return m, fetchAlbumFromAudioPlaylist(m.ytmapiClient, audioPlaylistID, m.navGen)
+	return m, fetchAlbumFromAudioPlaylist(m.ytmapiClient, audioPlaylistID, m.navGen, m.navCtx)
 }
 
 // playingAlbumRef returns the album name + browse/playlist id for the current track.
@@ -148,7 +156,8 @@ func (m Model) goToPlayingAlbum() (Model, tea.Cmd) {
 		m.navGen++
 		m.pageLoading = true
 		m.markSessionDirty()
-		return m, resolvePlayingAlbum(m.ytmapiClient, m.currentTrack.VideoID, name, m.navGen)
+		ctx := m.startNavCtx()
+		return m, resolvePlayingAlbum(m.ytmapiClient, m.currentTrack.VideoID, name, m.navGen, ctx)
 	}
 
 	m.statusMsg = "View Album unavailable"
@@ -165,7 +174,7 @@ func isAlbumAudioPlaylistID(id string) bool {
 
 func (m Model) openPlaylist(playlistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading playlist…")
-	return m, fetchPlaylist(m.ytmapiClient, playlistID, m.navGen)
+	return m, fetchPlaylist(m.ytmapiClient, playlistID, m.navGen, m.navCtx)
 }
 
 func (m Model) goHome() Model {
@@ -179,6 +188,7 @@ func (m Model) goHome() Model {
 
 // leaveDetailPages invalidates in-flight page/search fetches and clears detail state.
 func (m Model) leaveDetailPages() Model {
+	m.cancelNavFetch()
 	m.navGen++
 	m.stack.Clear()
 	m.searchResults = nil
@@ -190,17 +200,63 @@ func (m Model) leaveDetailPages() Model {
 	return m
 }
 
-func (m Model) popNav() Model {
+func (m *Model) cancelNavFetch() {
+	if m.navCancel != nil {
+		m.navCancel()
+		m.navCancel = nil
+	}
+	m.navCtx = nil
+}
+
+func (m *Model) startNavCtx() context.Context {
+	m.cancelNavFetch()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.navCancel = cancel
+	m.navCtx = ctx
+	return ctx
+}
+
+func (m Model) popNav() (Model, tea.Cmd) {
+	m.cancelNavFetch()
 	m.navGen++
+	gen := m.navGen
 	if _, ok := m.stack.Pop(); ok {
-		// Clear page data for the screen we left; keep parent data if stack still has pages.
+		// Clear page data for the screen we left; refetch parent if missing.
 		if sc, ok := m.stack.Current(); ok {
 			switch sc.Kind {
 			case ScreenArtist:
 				m.albumPage = nil
 				m.playlistPage = nil
-			case ScreenAlbum, ScreenPlaylist:
-				// keep artist if we came from there
+				if m.artistPage == nil && sc.ID != "" {
+					m.pageLoading = true
+					m.pageErr = ""
+					m.statusMsg = "Loading artist…"
+					m.setMainContent()
+					m.mainViewport.YOffset = 0
+					ctx := m.startNavCtx()
+					return m, fetchArtist(m.ytmapiClient, sc.ID, gen, ctx)
+				}
+			case ScreenAlbum:
+				m.playlistPage = nil
+				if m.albumPage == nil && sc.ID != "" {
+					m.pageLoading = true
+					m.pageErr = ""
+					m.statusMsg = "Loading album…"
+					m.setMainContent()
+					m.mainViewport.YOffset = 0
+					ctx := m.startNavCtx()
+					return m, fetchAlbum(m.ytmapiClient, sc.ID, gen, ctx)
+				}
+			case ScreenPlaylist:
+				if m.playlistPage == nil && sc.ID != "" {
+					m.pageLoading = true
+					m.pageErr = ""
+					m.statusMsg = "Loading playlist…"
+					m.setMainContent()
+					m.mainViewport.YOffset = 0
+					ctx := m.startNavCtx()
+					return m, fetchPlaylist(m.ytmapiClient, sc.ID, gen, ctx)
+				}
 			default:
 				m.artistPage = nil
 				m.albumPage = nil
@@ -218,14 +274,14 @@ func (m Model) popNav() Model {
 		m.pageErr = ""
 		m.setMainContent()
 		m.mainViewport.YOffset = 0
-		return m
+		return m, nil
 	}
 	if len(m.searchResults) > 0 {
 		m.searchResults = nil
 		m.setMainContent()
 		m.mainViewport.YOffset = 0
 	}
-	return m
+	return m, nil
 }
 
 // playVideo starts playback for an ad-hoc/search/home click.

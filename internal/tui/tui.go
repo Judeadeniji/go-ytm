@@ -111,9 +111,13 @@ type Model struct {
 
 	sessionStore *library.DB
 	sessionDirty bool
+	lastSessionPosSec int // throttle play_pos session dirty to 1Hz
 	audioLoaded     bool    // mpv has the current track loaded
 	resumeSeek      float64 // seek here after load (session restore)
 	resumeSeekTries int     // remaining progress-tick seek nudges
+
+	navCancel context.CancelFunc
+	navCtx    context.Context
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
@@ -259,9 +263,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.nowPlayingOpen {
 				return m.closeNowPlaying(), nil
 			}
-			m = m.popNav()
-			m.markSessionDirty()
-			return m, nil
+			mm, cmd := m.popNav()
+			mm.markSessionDirty()
+			return mm, cmd
 		case "f":
 			if m.currentTrack == nil && !m.nowPlayingOpen {
 				return m, nil
@@ -353,6 +357,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.playPos = 0
 			m.playDuration = 0
 			m.playBuffered = 0
+			m.clearResumeSeek()
 			m.markSessionDirty()
 			m.setQueuePanelContent()
 			return m, stopPlayback(m.player)
@@ -394,17 +399,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.toggleMute()
 		case ",":
 			if m.currentTrack != nil {
+				m.clearResumeSeek()
 				return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
 			}
 			return m, nil
 		case ".":
 			if m.currentTrack != nil {
+				m.clearResumeSeek()
 				return m, tea.Batch(seekCmd(m.player, 5), fetchPlayProgress(m.player))
 			}
 			return m, nil
 		case "right", "l":
 			if m.nowPlayingOpen {
 				if m.currentTrack != nil {
+					m.clearResumeSeek()
 					return m, tea.Batch(seekCmd(m.player, 5), fetchPlayProgress(m.player))
 				}
 				return m, nil
@@ -413,12 +421,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.moveHomeCard(1)
 			}
 			if m.currentTrack != nil {
+				m.clearResumeSeek()
 				return m, tea.Batch(seekCmd(m.player, 5), fetchPlayProgress(m.player))
 			}
 			return m, nil
 		case "left", "h":
 			if m.nowPlayingOpen {
 				if m.currentTrack != nil {
+					m.clearResumeSeek()
 					return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
 				}
 				return m, nil
@@ -427,6 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.moveHomeCard(-1)
 			}
 			if m.currentTrack != nil {
+				m.clearResumeSeek()
 				return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
 			}
 			return m, nil
@@ -607,12 +618,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lyricsErr = ""
 		m.lyricsInstrumental = msg.Instrumental
 		m.lyricsPlain = msg.Plain
+		keepBrowse := !m.lyricsFollow
 		m.lyricsLines = msg.Lines
-		m.lyricsFollow = true
-		m.lyricsIdleAt = time.Time{}
+		if keepBrowse {
+			// Duration-refine / same-track refresh must not yank user scroll.
+		} else {
+			m.lyricsFollow = true
+			m.lyricsIdleAt = time.Time{}
+		}
 		if len(m.lyricsLines) > 0 {
 			pos := time.Duration(m.playPos * float64(time.Second))
-			m.lyricsCursor = lyrics.ActiveLineIndex(m.lyricsLines, pos)
+			if m.lyricsFollow || m.lyricsCursor < 0 {
+				m.lyricsCursor = lyrics.ActiveLineIndex(m.lyricsLines, pos)
+			}
 		} else {
 			m.lyricsCursor = -1
 		}
@@ -630,6 +648,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.onTracklistScreen() {
 					m.setMainContent()
 				}
+			}
+			if msg.Op == "mute" {
+				m.muted = !m.muted
+			}
+			if msg.Op == "volume" {
+				// Best-effort: re-read is hard; surface error only.
 			}
 			op := msg.Op
 			if op == "" {
@@ -686,11 +710,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		cmds = append(cmds, tickSessionPersist())
 		if m.sessionDirty {
+			snap := m.snapshot()
 			m.sessionDirty = false
-			cmds = append(cmds, saveSession(m.sessionStore, m.snapshot()))
+			cmds = append(cmds, saveSession(m.sessionStore, snap))
 		}
 		return m, tea.Batch(cmds...)
 	case sessionSavedMsg:
+		if msg.Err != nil {
+			m.sessionDirty = true
+			m.statusMsg = "Session save failed"
+		}
 		return m, nil
 	case trackEndedMsg:
 		if msg.Closed {
@@ -729,8 +758,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Duration > 0 {
 				m.playDuration = msg.Duration
 			}
-			if msg.Buffered > 0 {
-				m.playBuffered = msg.Buffered
+			m.playBuffered = msg.Buffered
+			if m.playBuffered < m.playPos {
+				m.playBuffered = m.playPos
 			}
 			var cmds []tea.Cmd
 			// Don't fight the mouse while scrubbing the progress bar.
@@ -738,9 +768,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.resumeSeek >= 0.5 {
 					if msg.Pos+2.5 >= m.resumeSeek {
 						m.playPos = msg.Pos
-						m.resumeSeek = 0
-						m.resumeSeekTries = 0
-						m.markSessionDirty()
+						m.clearResumeSeek()
+						m.markPlayPosDirty()
 					} else {
 						// Keep restored position in UI/session until seek sticks.
 						m.playPos = m.resumeSeek
@@ -750,13 +779,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						} else {
 							// Give up nudging; follow real position so we don't soft-lock.
 							m.playPos = msg.Pos
-							m.resumeSeek = 0
-							m.markSessionDirty()
+							m.clearResumeSeek()
+							m.markPlayPosDirty()
 						}
 					}
 				} else {
 					m.playPos = msg.Pos
-					m.markSessionDirty()
+					m.markPlayPosDirty()
 				}
 			}
 			// Refetch lyrics once duration becomes known after a duration=0 fetch.
@@ -802,7 +831,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.searchResults = msg.Results
-		m.listCursor = 0
+		if m.listCursor < 0 || m.listCursor >= len(m.searchResults) {
+			m.listCursor = 0
+		}
 		m.stack.Clear()
 		m.artistPage = nil
 		m.albumPage = nil
@@ -883,7 +914,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.albumPage = msg.Page
 		m.pageErr = ""
-		m.trackCursor = 0
+		n := len(msg.Page.Tracks)
+		if m.trackCursor < 0 || m.trackCursor >= n {
+			m.trackCursor = 0
+		}
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenAlbum, ID: msg.BrowseID, Title: msg.Page.Title})
 		m.statusMsg = msg.Page.Title
 		m = m.syncTrackCursorToPlaying()
@@ -908,7 +942,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.playlistPage = msg.Page
 		m.pageErr = ""
-		m.trackCursor = 0
+		n := len(msg.Page.Tracks)
+		if m.trackCursor < 0 || m.trackCursor >= n {
+			m.trackCursor = 0
+		}
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenPlaylist, ID: msg.Page.ID, Title: msg.Page.Title})
 		m.statusMsg = msg.Page.Title
 		m = m.syncTrackCursorToPlaying()

@@ -45,9 +45,9 @@ func fetchPlayProgress(p *player.Player) tea.Cmd {
 		if err != nil {
 			return playProgressMsg{Err: err}
 		}
-		dur, err := p.DurationSeconds()
-		if err != nil {
-			return playProgressMsg{Pos: pos, Err: err}
+		dur, durErr := p.DurationSeconds()
+		if durErr != nil {
+			dur = 0
 		}
 		buf, _ := p.BufferedSeconds()
 		if buf < pos {
@@ -262,7 +262,8 @@ func (m Model) toggleMute() (Model, tea.Cmd) {
 // handleProgressScrub handles click and drag seeking on the progress bar.
 // Press/drag only previews scrubPos in the UI; audio seeks on release.
 func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
-	if m.currentTrack == nil || m.playDuration <= 0 || !m.audioLoaded {
+	dur := m.effectiveDuration()
+	if m.currentTrack == nil || dur <= 0 || !m.audioLoaded {
 		if m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease) {
 			m.scrubbing = false
 			return m, nil, true
@@ -291,6 +292,7 @@ func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
 		m.playPos = m.scrubPos
 		m.scrubbing = false
+		m.clearResumeSeek()
 		m.markSessionDirty()
 		return m, tea.Batch(seekAbsoluteCmd(m.player, m.scrubPos), fetchPlayProgress(m.player)), true
 	}
@@ -299,7 +301,8 @@ func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 }
 
 func (m Model) seekPosFromProgressMouse(msg tea.MouseMsg, z *zone.ZoneInfo) float64 {
-	if z == nil || z.IsZero() || m.playDuration <= 0 {
+	dur := m.effectiveDuration()
+	if z == nil || z.IsZero() || dur <= 0 {
 		return m.playPos
 	}
 	w := z.EndX - z.StartX + 1
@@ -314,12 +317,12 @@ func (m Model) seekPosFromProgressMouse(msg tea.MouseMsg, z *zone.ZoneInfo) floa
 		x = w - 1
 	}
 	ratio := float64(x) / float64(w-1)
-	pos := ratio * m.playDuration
+	pos := ratio * dur
 	if pos < 0 {
 		pos = 0
 	}
-	if pos > m.playDuration {
-		pos = m.playDuration
+	if pos > dur {
+		pos = dur
 	}
 	return pos
 }

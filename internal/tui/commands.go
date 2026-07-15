@@ -57,7 +57,13 @@ func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, c
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		if err := ctx.Err(); err != nil {
+			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
+		}
 		if err := p.Load(url); err != nil {
+			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
+		}
+		if err := ctx.Err(); err != nil {
 			return TrackStartedMsg{Track: t, Gen: gen, Err: err}
 		}
 		if err := p.Play(); err != nil {
@@ -251,7 +257,7 @@ type SearchResultsMsg struct {
 }
 
 func doSearch(apiClient *ytmapi.Client, query string, gen int) tea.Cmd {
-	return doSearchFiltered(apiClient, query, "", gen)
+	return doSearchFiltered(apiClient, query, "", gen, context.Background())
 }
 
 type SearchSuggestionsMsg struct {

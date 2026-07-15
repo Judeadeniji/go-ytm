@@ -45,43 +45,55 @@ type WatchMsg struct {
 	Err         error
 }
 
-func fetchArtist(api *ytmapi.Client, channelID string, gen int) tea.Cmd {
+func fetchArtist(api *ytmapi.Client, channelID string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		page, err := api.GetArtist(context.Background(), channelID)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		page, err := api.GetArtist(ctx, channelID)
 		return ArtistMsg{Page: page, RequestID: channelID, Gen: gen, Err: err}
 	}
 }
 
-func fetchAlbum(api *ytmapi.Client, browseID string, gen int) tea.Cmd {
+func fetchAlbum(api *ytmapi.Client, browseID string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		page, err := api.GetAlbum(context.Background(), browseID)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		page, err := api.GetAlbum(ctx, browseID)
 		return AlbumMsg{Page: page, BrowseID: browseID, Gen: gen, Err: err}
 	}
 }
 
-func fetchAlbumFromAudioPlaylist(api *ytmapi.Client, audioPlaylistID string, gen int) tea.Cmd {
+func fetchAlbumFromAudioPlaylist(api *ytmapi.Client, audioPlaylistID string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		browseID, err := api.GetAlbumBrowseID(context.Background(), audioPlaylistID)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		browseID, err := api.GetAlbumBrowseID(ctx, audioPlaylistID)
 		if err != nil {
 			return AlbumMsg{Gen: gen, Err: err}
 		}
-		page, err := api.GetAlbum(context.Background(), browseID)
+		page, err := api.GetAlbum(ctx, browseID)
 		return AlbumMsg{Page: page, BrowseID: browseID, Gen: gen, Err: err}
 	}
 }
 
 // resolvePlayingAlbum finds the Album/Single/EP browse id for a video via song metadata.
-func resolvePlayingAlbum(api *ytmapi.Client, videoID, fallbackName string, gen int) tea.Cmd {
+func resolvePlayingAlbum(api *ytmapi.Client, videoID, fallbackName string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		if api == nil || videoID == "" {
 			return resolveAlbumMsg{Gen: gen, Name: fallbackName, Err: fmt.Errorf("unavailable")}
 		}
-		song, err := api.GetSong(context.Background(), videoID)
+		song, err := api.GetSong(ctx, videoID)
 		if err != nil {
 			return resolveAlbumMsg{Gen: gen, Name: fallbackName, Err: err}
 		}
 		name := fallbackName
-		id := ""
+		var id string
 		if song != nil && song.Album != nil {
 			if song.Album.Name != "" {
 				name = song.Album.Name
@@ -102,9 +114,12 @@ func resolvePlayingAlbum(api *ytmapi.Client, videoID, fallbackName string, gen i
 	}
 }
 
-func fetchPlaylist(api *ytmapi.Client, playlistID string, gen int) tea.Cmd {
+func fetchPlaylist(api *ytmapi.Client, playlistID string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		page, err := api.GetPlaylist(context.Background(), playlistID, 100)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		page, err := api.GetPlaylist(ctx, playlistID, 100)
 		return PlaylistMsg{Page: page, Gen: gen, Err: err}
 	}
 }
@@ -116,9 +131,12 @@ func fetchWatch(api *ytmapi.Client, videoID, playlistID string, radio bool, gen 
 	}
 }
 
-func doSearchFiltered(api *ytmapi.Client, query, filter string, gen int) tea.Cmd {
+func doSearchFiltered(api *ytmapi.Client, query, filter string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		results, err := api.SearchFiltered(context.Background(), query, filter, 30)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		results, err := api.SearchFiltered(ctx, query, filter, 30)
 		return SearchResultsMsg{Results: results, Gen: gen, Err: err}
 	}
 }
