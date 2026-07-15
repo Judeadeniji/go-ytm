@@ -42,12 +42,22 @@ type Snapshot struct {
 	Volume           float64   `json:"volume"`
 	Muted            bool      `json:"muted"`
 	Normalize        bool      `json:"normalize"`
+	Crossfade        bool      `json:"crossfade"`
+	CrossfadeSec     int       `json:"crossfadeSec"`
 	WasPlaying       bool      `json:"wasPlaying"`
 	NowPlayingOpen   bool      `json:"nowPlayingOpen"`
 	Queue            []Track   `json:"queue"`
 	QueueIndex       int       `json:"queueIndex"`
 	ShowSearch       bool      `json:"showSearch"`
 	Nav              []NavItem `json:"nav"`
+}
+
+// PlaybackPrefs returns the settings-ready playback preference subset.
+func (s Snapshot) PlaybackPrefs() PlaybackPrefs {
+	return PlaybackPrefs{
+		Crossfade:    s.Crossfade,
+		CrossfadeSec: ClampCrossfadeSec(s.CrossfadeSec),
+	}
 }
 
 // DefaultPath returns the legacy JSON session path (used once for migration).

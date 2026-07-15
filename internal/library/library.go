@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -233,6 +233,20 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 				return fmt.Errorf("migrate v5: %w", err)
 			}
 		}
+		ver = 5
+	}
+
+	if ver < 6 {
+		alters := []string{
+			`ALTER TABLE session ADD COLUMN crossfade INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE session ADD COLUMN crossfade_sec INTEGER NOT NULL DEFAULT 3`,
+			`INSERT INTO schema_migrations(version) VALUES (6)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v6: %w", err)
+			}
+		}
 	}
 
 	return tx.Commit()
@@ -285,14 +299,16 @@ func (db *DB) LoadSession() (*session.Snapshot, error) {
 
 	var snap session.Snapshot
 	var hidden, showSearch int
-	var muted, wasPlaying, nowPlaying, normalize int
+	var muted, wasPlaying, nowPlaying, normalize, crossfade int
+	var crossfadeSec int
 	err := db.sql.QueryRow(`
 SELECT active_menu, queue_panel_hidden, search_filter, last_search_query,
        active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
        play_pos, queue_index, show_search,
        COALESCE(volume, 100), COALESCE(muted, 0),
        COALESCE(play_duration, 0), COALESCE(was_playing, 0), COALESCE(now_playing_open, 0),
-       COALESCE(normalize, 0)
+       COALESCE(normalize, 0),
+       COALESCE(crossfade, 0), COALESCE(crossfade_sec, 3)
 FROM session WHERE id = 1`).Scan(
 		&snap.ActiveMenu, &hidden, &snap.SearchFilter, &snap.LastSearchQuery,
 		&snap.ActiveCarousel, &snap.HomeCardCursor, &snap.TrackCursor, &snap.ListCursor, &snap.QueueCursor,
@@ -300,6 +316,7 @@ FROM session WHERE id = 1`).Scan(
 		&snap.Volume, &muted,
 		&snap.PlayDuration, &wasPlaying, &nowPlaying,
 		&normalize,
+		&crossfade, &crossfadeSec,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -314,6 +331,8 @@ FROM session WHERE id = 1`).Scan(
 	snap.WasPlaying = wasPlaying != 0
 	snap.NowPlayingOpen = nowPlaying != 0
 	snap.Normalize = normalize != 0
+	snap.Crossfade = crossfade != 0
+	snap.CrossfadeSec = session.ClampCrossfadeSec(crossfadeSec)
 	if snap.Volume < 0 {
 		snap.Volume = 0
 	}
@@ -379,7 +398,7 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	}
 	defer tx.Rollback()
 
-	hidden, showSearch, muted, wasPlaying, nowPlaying, normalize := 0, 0, 0, 0, 0, 0
+	hidden, showSearch, muted, wasPlaying, nowPlaying, normalize, crossfade := 0, 0, 0, 0, 0, 0, 0
 	if snap.QueuePanelHidden {
 		hidden = 1
 	}
@@ -398,6 +417,10 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	if snap.Normalize {
 		normalize = 1
 	}
+	if snap.Crossfade {
+		crossfade = 1
+	}
+	crossfadeSec := session.ClampCrossfadeSec(snap.CrossfadeSec)
 	vol := snap.Volume
 	if vol < 0 {
 		vol = 0
@@ -411,12 +434,14 @@ INSERT INTO session (
   id, active_menu, queue_panel_hidden, search_filter, last_search_query,
   active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
   play_pos, queue_index, show_search, volume, muted,
-  play_duration, was_playing, now_playing_open, normalize, updated_at
+  play_duration, was_playing, now_playing_open, normalize,
+  crossfade, crossfade_sec, updated_at
 ) VALUES (
   1, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, datetime('now')
+  ?, ?, ?, ?,
+  ?, ?, datetime('now')
 )
 ON CONFLICT(id) DO UPDATE SET
   active_menu=excluded.active_menu,
@@ -437,11 +462,14 @@ ON CONFLICT(id) DO UPDATE SET
   was_playing=excluded.was_playing,
   now_playing_open=excluded.now_playing_open,
   normalize=excluded.normalize,
+  crossfade=excluded.crossfade,
+  crossfade_sec=excluded.crossfade_sec,
   updated_at=datetime('now')
 `, snap.ActiveMenu, hidden, snap.SearchFilter, snap.LastSearchQuery,
 		snap.ActiveCarousel, snap.HomeCardCursor, snap.TrackCursor, snap.ListCursor, snap.QueueCursor,
 		snap.PlayPos, snap.QueueIndex, showSearch, vol, muted,
-		snap.PlayDuration, wasPlaying, nowPlaying, normalize); err != nil {
+		snap.PlayDuration, wasPlaying, nowPlaying, normalize,
+		crossfade, crossfadeSec); err != nil {
 		return err
 	}
 

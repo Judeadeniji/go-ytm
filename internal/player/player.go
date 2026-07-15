@@ -76,6 +76,8 @@ func NewPlayer() (*Player, error) {
 		// YouTube HTTP streams often report unseekable until demux; allow resume seeks.
 		"--force-seekable=yes",
 		"--cache=yes",
+		// Prefetch/append next track for gapless handoff when crossfade is armed.
+		"--gapless-audio=yes",
 		"--input-ipc-server="+socketPath,
 	)
 
@@ -382,6 +384,52 @@ func (p *Player) BufferedSeconds() (float64, error) {
 // Load replaces the current media with url (stops current playback first).
 func (p *Player) Load(url string) error {
 	return p.sendCommand("loadfile", url, "replace")
+}
+
+// Append adds url to the end of the mpv playlist without interrupting playback.
+func (p *Player) Append(url string) error {
+	return p.sendCommand("loadfile", url, "append")
+}
+
+// PlaylistClear removes all playlist entries.
+func (p *Player) PlaylistClear() error {
+	return p.sendCommand("playlist-clear")
+}
+
+// PlaylistNext forces advancement to the next playlist entry.
+func (p *Player) PlaylistNext() error {
+	return p.sendCommand("playlist-next", "force")
+}
+
+// PlaylistRemove drops the playlist entry at index (0-based).
+func (p *Player) PlaylistRemove(index int) error {
+	return p.sendCommand("playlist-remove", index)
+}
+
+// PlaylistCount returns how many entries are in the mpv playlist.
+func (p *Player) PlaylistCount() (int, error) {
+	data, err := p.getProperty("playlist-count")
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// PlaylistPos returns the current playlist index (-1 if none).
+func (p *Player) PlaylistPos() (int, error) {
+	data, err := p.getProperty("playlist-pos")
+	if err != nil {
+		return -1, err
+	}
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return -1, err
+	}
+	return n, nil
 }
 
 // LoadAt loads url and asks mpv to start at startSec (seconds).
