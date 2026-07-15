@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // settingsTabs defines the ordered list of tab IDs and their display names.
@@ -20,20 +21,315 @@ var settingsTabs = []struct {
 	{"general", "General", "⚙"},
 }
 
+// settingsItemKind describes what kind of interaction a settings row supports.
+type settingsItemKind int
+
+const (
+	kindToggle  settingsItemKind = iota // enter/space flips on/off
+	kindCycle                           // enter/space advances; left/right also work
+	kindValue                           // left/right or −/+ adjust; enter resets
+	kindAction                          // enter fires the action
+	kindInfo                            // non-interactive label
+)
+
+// settingsItem is one navigable row in the settings panel.
+type settingsItem struct {
+	Kind    settingsItemKind
+	Label   string
+	Desc    string
+	ZoneID  string // for mouse compatibility
+	TabID   string // which tab this belongs to
+}
+
+// settingsItems returns the ordered list of interactive items for the given tab.
+// This is the single source of truth for keyboard navigation order.
+func (m Model) settingsItemsForTab(tabID string) []settingsItem {
+	switch tabID {
+	case "account":
+		return []settingsItem{
+			{kindAction, "Sign in to YouTube Music", "Connect your Google account via OAuth device flow", "settings_oauth", "account"},
+			{kindToggle, "Send listening history", "Allow YouTube Music to personalise recommendations", "settings_history", "account"},
+		}
+	case "playback":
+		items := []settingsItem{
+			{kindCycle, "Repeat Mode", "Off → All → One", "settings_repeat", "playback"},
+			{kindToggle, "Shuffle", "Play tracks in random order", "settings_shuffle", "playback"},
+			{kindToggle, "Crossfade", "Smoothly blend between tracks", "settings_crossfade", "playback"},
+		}
+		if m.crossfade {
+			items = append(items,
+				settingsItem{kindValue, "Crossfade Duration", "Overlap length in seconds", "settings_crossfade_val", "playback"},
+			)
+		}
+		items = append(items,
+			settingsItem{kindCycle, "Sleep Timer", "Auto-pause after a set time", "settings_sleep", "playback"},
+		)
+		return items
+	case "audio":
+		return []settingsItem{
+			{kindToggle, "Loudness Normalization", "Level out volume differences between tracks", "settings_normalize", "audio"},
+			{kindToggle, "Silence Skip", "Jump over silent passages automatically", "settings_silence", "audio"},
+			{kindValue, "Playback Speed", "Adjust tempo (0.25× – 4.00×)  ·  left/right or ← →", "settings_tempo_val", "audio"},
+			{kindValue, "Pitch Shift", "Shift pitch in semitones (−12 to +12)", "settings_pitch_val", "audio"},
+			{kindAction, "Reset Speed & Pitch", "Restore to 1.00× speed and 0 semitones", "settings_tempo_reset", "audio"},
+			{kindCycle, "EQ Preset", "Apply an audio filter to the output", "settings_eq", "audio"},
+		}
+	case "downloads":
+		return []settingsItem{
+			{kindAction, "Open Download Folder", "Browse cached audio files  (./downloads/)", "settings_open_downloads", "downloads"},
+			{kindAction, "Calculate Cache Size", "Show total space used by offline files", "settings_cache_size", "downloads"},
+			{kindAction, "Clear Cache", "Delete all downloaded audio files", "settings_clear_cache", "downloads"},
+			{kindCycle, "Download Quality", "Format preference for offline downloads", "settings_dl_quality", "downloads"},
+		}
+	case "general":
+		return []settingsItem{
+			{kindToggle, "Show Queue Panel", "Display the queue / lyrics sidebar", "settings_toggle_queue", "general"},
+			{kindToggle, "Remember Position", "Resume from where you left off on restart", "settings_remember_pos", "general"},
+			{kindAction, "Clear Session", "Reset the queue, history and resume position", "settings_clear_session", "general"},
+			{kindInfo, "go-ytm  ·  Terminal YouTube Music client", "Built with mpv · ytmusicapi · bubbletea", "", "general"},
+		}
+	}
+	return nil
+}
+
+// settingsTabIndex returns the index of the current tab in settingsTabs.
+func settingsTabIndex(id string) int {
+	for i, t := range settingsTabs {
+		if t.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
+// settingsClampRow clamps settingsRow to valid range for current tab.
+func (m Model) settingsClampRow() Model {
+	items := m.settingsItemsForTab(m.settingsTab)
+	// skip info-only rows
+	max := 0
+	for i, it := range items {
+		if it.Kind != kindInfo {
+			max = i
+		}
+	}
+	if m.settingsRow < 0 {
+		m.settingsRow = 0
+	}
+	if m.settingsRow > max {
+		m.settingsRow = max
+	}
+	return m
+}
+
+// HandleSettingsKey is the keyboard handler when activeMenu == "Settings".
+// Returns (Model, tea.Cmd, handled bool).
+func (m Model) HandleSettingsKey(key string) (Model, tea.Cmd, bool) {
+	// Tab digit shortcuts 1–5
+	switch key {
+	case "1", "2", "3", "4", "5":
+		idx := int(key[0] - '1')
+		if idx < len(settingsTabs) {
+			m.settingsTab = settingsTabs[idx].ID
+			m.settingsRow = 0
+			m.setMainContent()
+			return m, nil, true
+		}
+	}
+
+	items := m.settingsItemsForTab(m.settingsTab)
+	if len(items) == 0 {
+		return m, nil, false
+	}
+
+	// safe current item
+	row := m.settingsRow
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(items) {
+		row = len(items) - 1
+	}
+	cur := items[row]
+
+	switch key {
+	// ── Navigation ──────────────────────────────────────────────────────────
+	case "up", "k":
+		m.settingsRow--
+		// skip info rows
+		items2 := m.settingsItemsForTab(m.settingsTab)
+		for m.settingsRow > 0 && items2[m.settingsRow].Kind == kindInfo {
+			m.settingsRow--
+		}
+		m = m.settingsClampRow()
+		m.setMainContent()
+		return m, nil, true
+
+	case "down", "j":
+		m.settingsRow++
+		items2 := m.settingsItemsForTab(m.settingsTab)
+		for m.settingsRow < len(items2)-1 && items2[m.settingsRow].Kind == kindInfo {
+			m.settingsRow++
+		}
+		m = m.settingsClampRow()
+		m.setMainContent()
+		return m, nil, true
+
+	// ── Activate / toggle ────────────────────────────────────────────────────
+	case "enter", " ":
+		mm, cmd := m.settingsActivate(cur)
+		mm.setMainContent()
+		return mm, cmd, true
+
+	// ── Value adjustment (left/right) ────────────────────────────────────────
+	case "left", "h":
+		if cur.Kind == kindValue {
+			mm, cmd := m.settingsDec(cur)
+			mm.setMainContent()
+			return mm, cmd, true
+		}
+		// fall through: switch tab left
+		tabIdx := settingsTabIndex(m.settingsTab)
+		tabIdx--
+		if tabIdx < 0 {
+			tabIdx = len(settingsTabs) - 1
+		}
+		m.settingsTab = settingsTabs[tabIdx].ID
+		m.settingsRow = 0
+		m.setMainContent()
+		return m, nil, true
+
+	case "right", "l":
+		if cur.Kind == kindValue {
+			mm, cmd := m.settingsInc(cur)
+			mm.setMainContent()
+			return mm, cmd, true
+		}
+		tabIdx := settingsTabIndex(m.settingsTab)
+		tabIdx++
+		if tabIdx >= len(settingsTabs) {
+			tabIdx = 0
+		}
+		m.settingsTab = settingsTabs[tabIdx].ID
+		m.settingsRow = 0
+		m.setMainContent()
+		return m, nil, true
+	}
+
+	return m, nil, false
+}
+
+// settingsActivate fires the primary action for a settings item.
+func (m Model) settingsActivate(it settingsItem) (Model, tea.Cmd) {
+	switch it.ZoneID {
+	// account
+	case "settings_oauth":
+		m.oauthState = 1
+		m.oauthInput.Placeholder = "Client ID"
+		m.oauthInput.Reset()
+		m.oauthInput.Focus()
+		return m, nil // Blink already in effect from Focus
+	case "settings_history":
+		m.statusMsg = "Listening history toggle (coming soon)"
+		return m, nil
+
+	// playback
+	case "settings_repeat":
+		return m.cycleRepeatMode()
+	case "settings_shuffle":
+		return m.toggleShuffle()
+	case "settings_crossfade":
+		return m.toggleCrossfade()
+	case "settings_crossfade_val":
+		return m.cycleCrossfadeSec()
+	case "settings_sleep":
+		return m.cycleSleepTimer()
+
+	// audio
+	case "settings_normalize":
+		return m.toggleNormalize()
+	case "settings_silence":
+		return m.toggleSilenceSkip()
+	case "settings_tempo_val":
+		return m.resetTempo()
+	case "settings_pitch_val":
+		return m.resetPitch()
+	case "settings_tempo_reset":
+		mm, c1 := m.resetTempo()
+		mmm, c2 := mm.resetPitch()
+		return mmm, tea.Batch(c1, c2)
+	case "settings_eq":
+		return m.cycleEQPreset()
+
+	// downloads
+	case "settings_clear_cache":
+		m.statusMsg = "Cache cleared (no files downloaded yet)"
+		return m, nil
+	case "settings_cache_size":
+		m.statusMsg = "Calculating…"
+		return m, nil
+	case "settings_open_downloads":
+		m.statusMsg = "Download folder: ./downloads/"
+		return m, nil
+	case "settings_dl_quality":
+		m.statusMsg = "Download quality: Best Available"
+		return m, nil
+
+	// general
+	case "settings_toggle_queue":
+		m.queuePanelHidden = !m.queuePanelHidden
+		m.markSessionDirty()
+		return m, nil
+	case "settings_remember_pos":
+		m.statusMsg = "Remember position always enabled"
+		return m, nil
+	case "settings_clear_session":
+		m.statusMsg = "Session cleared"
+		return m, nil
+	}
+	return m, nil
+}
+
+// settingsInc increments a value item.
+func (m Model) settingsInc(it settingsItem) (Model, tea.Cmd) {
+	switch it.ZoneID {
+	case "settings_tempo_val":
+		return m.adjustTempo(0.05)
+	case "settings_pitch_val":
+		return m.adjustPitch(1)
+	case "settings_crossfade_val":
+		return m.stepCrossfadeSec(1)
+	}
+	return m, nil
+}
+
+// settingsDec decrements a value item.
+func (m Model) settingsDec(it settingsItem) (Model, tea.Cmd) {
+	switch it.ZoneID {
+	case "settings_tempo_val":
+		return m.adjustTempo(-0.05)
+	case "settings_pitch_val":
+		return m.adjustPitch(-1)
+	case "settings_crossfade_val":
+		return m.stepCrossfadeSec(-1)
+	}
+	return m, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rendering
+// ─────────────────────────────────────────────────────────────────────────────
+
 // generateSettingsContent renders the full two-panel settings layout.
 func (m Model) generateSettingsContent(mainWidth int) string {
-	// ── sidebar ──────────────────────────────────────────────────────────────
 	const sidebarW = 22
 	sidebar := m.renderSettingsSidebar(sidebarW)
 
-	// ── content panel ────────────────────────────────────────────────────────
-	contentW := mainWidth - sidebarW - 3 // 3 = divider + padding
+	contentW := mainWidth - sidebarW - 3
 	if contentW < 30 {
 		contentW = 30
 	}
 	panel := m.renderSettingsPanel(contentW)
 
-	// ── divider between sidebar and panel ────────────────────────────────────
 	sidebarH := strings.Count(sidebar, "\n") + 1
 	panelH := strings.Count(panel, "\n") + 1
 	divH := sidebarH
@@ -64,9 +360,10 @@ func (m Model) renderSettingsSidebar(w int) string {
 	sb.WriteString(titleStyle.Render("Settings"))
 	sb.WriteString("\n\n")
 
-	for _, tab := range settingsTabs {
+	for i, tab := range settingsTabs {
 		active := m.settingsTab == tab.ID
 
+		numHint := lipgloss.NewStyle().Foreground(colorDivider).Render(fmt.Sprintf("%d", i+1))
 		var rowStyle lipgloss.Style
 		if active {
 			rowStyle = lipgloss.NewStyle().
@@ -83,35 +380,49 @@ func (m Model) renderSettingsSidebar(w int) string {
 				Padding(0, 1)
 		}
 
-		label := fmt.Sprintf("%s  %s", tab.Icon, tab.Label)
+		label := fmt.Sprintf("%s  %s  %s", tab.Icon, tab.Label, numHint)
 		row := m.zone.Mark("settings_tab_"+tab.ID, rowStyle.Render(label))
 		sb.WriteString(row)
 		sb.WriteString("\n")
 	}
+
+	sb.WriteString("\n")
+	hintStyle := lipgloss.NewStyle().Foreground(colorDivider).Width(w).Padding(0, 1)
+	sb.WriteString(hintStyle.Render("↑/↓   navigate rows"))
+	sb.WriteString("\n")
+	sb.WriteString(hintStyle.Render("←/→   switch tabs"))
+	sb.WriteString("\n")
+	sb.WriteString(hintStyle.Render("Enter  activate"))
+	sb.WriteString("\n")
+	sb.WriteString(hintStyle.Render("1–5    jump to tab"))
+	sb.WriteString("\n")
+	sb.WriteString(hintStyle.Render("Tab    switch pane"))
 
 	return sb.String()
 }
 
 // renderSettingsPanel renders the right content area for the active tab.
 func (m Model) renderSettingsPanel(w int) string {
+	items := m.settingsItemsForTab(m.settingsTab)
 	switch m.settingsTab {
 	case "account":
-		return m.renderSettingsAccount(w)
+		return m.renderSettingsAccount(w, items)
 	case "playback":
-		return m.renderSettingsPlayback(w)
+		return m.renderSettingsPlayback(w, items)
 	case "audio":
-		return m.renderSettingsAudio(w)
+		return m.renderSettingsAudio(w, items)
 	case "downloads":
-		return m.renderSettingsDownloads(w)
+		return m.renderSettingsDownloads(w, items)
 	case "general":
-		return m.renderSettingsGeneral(w)
+		return m.renderSettingsGeneral(w, items)
 	}
 	return ""
 }
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
-// settingsSectionHeader renders a bolded section heading.
 func settingsSectionHeader(title string) string {
 	return lipgloss.NewStyle().
 		Bold(true).
@@ -119,7 +430,6 @@ func settingsSectionHeader(title string) string {
 		Render(title) + "\n\n"
 }
 
-// settingsCard wraps a block of rows in a subtle card background.
 func settingsCard(w int, content string) string {
 	return lipgloss.NewStyle().
 		Background(colorSearchBg).
@@ -129,360 +439,287 @@ func settingsCard(w int, content string) string {
 		Render(content) + "\n"
 }
 
-// settingsToggleRow renders: [Label]  [On/Off toggle]  [hint]
-func (m Model) settingsToggleRow(label, desc, zoneID string, on bool) string {
-	var toggleStr string
-	if on {
-		toggleStr = lipgloss.NewStyle().Foreground(colorAccent).Render("● On ")
-	} else {
-		toggleStr = lipgloss.NewStyle().Foreground(colorSubtext).Render("○ Off")
+// settingsRow renders one settings row with cursor-aware focus highlight.
+// rowIdx is its position in the settingsItemsForTab list.
+func (m Model) renderSettingsRow(it settingsItem, rowIdx int, valStr string, w int) string {
+	focused := m.activeMenu == "Settings" && m.settingsRow == rowIdx && it.Kind != kindInfo
+
+	// Left column: cursor + label + description
+	cursor := "  "
+	labelColor := colorText
+	descColor := colorSubtext
+	bg := colorSearchBg // inside card already
+
+	if focused {
+		cursor = lipgloss.NewStyle().Foreground(colorAccent).Render("› ")
+		labelColor = colorAccent
+		_ = descColor
+		_ = bg
 	}
-	toggle := m.zone.Mark(zoneID, lipgloss.NewStyle().
-		Background(colorFocusBg).
-		Foreground(colorText).
-		Padding(0, 1).
-		Render(toggleStr))
-
-	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorSubtext)
-
-	left := lipgloss.JoinVertical(lipgloss.Left,
-		labelStyle.Render(label),
-		descStyle.Render(desc),
-	)
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", 2), toggle) + "\n"
-}
-
-// settingsValueRow renders: [Label]  [− value +]
-func (m Model) settingsValueRow(label, desc, val, zoneDecID, zoneIncID string) string {
-	decBtn := m.zone.Mark(zoneDecID, lipgloss.NewStyle().Foreground(colorSubtext).Background(colorFocusBg).Padding(0, 1).Render("−"))
-	incBtn := m.zone.Mark(zoneIncID, lipgloss.NewStyle().Foreground(colorSubtext).Background(colorFocusBg).Padding(0, 1).Render("+"))
-	valStr := lipgloss.NewStyle().Foreground(colorText).Bold(true).Width(10).Align(lipgloss.Center).Render(val)
-	controls := lipgloss.JoinHorizontal(lipgloss.Center, decBtn, valStr, incBtn)
-
-	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorSubtext)
-
-	left := lipgloss.JoinVertical(lipgloss.Left,
-		labelStyle.Render(label),
-		descStyle.Render(desc),
-	)
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", 2), controls) + "\n"
-}
-
-// settingsCycleRow renders: [Label]  [← value →] (cycle through options)
-func (m Model) settingsCycleRow(label, desc, val, zoneID string) string {
-	btn := m.zone.Mark(zoneID, lipgloss.NewStyle().
-		Foreground(colorText).
-		Background(colorFocusBg).
-		Padding(0, 1).
-		Render("↻  "+val))
-
-	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorSubtext)
-
-	left := lipgloss.JoinVertical(lipgloss.Left,
-		labelStyle.Render(label),
-		descStyle.Render(desc),
-	)
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", 2), btn) + "\n"
-}
-
-// settingsActionRow renders: [Label]  [button text]
-func (m Model) settingsActionRow(label, desc, btnText, zoneID string, danger bool) string {
-	btnColor := colorAccent
-	if danger {
-		btnColor = lipgloss.Color("#FF4444")
+	if it.Kind == kindInfo {
+		labelColor = colorSubtext
 	}
-	btn := m.zone.Mark(zoneID, lipgloss.NewStyle().
-		Foreground(btnColor).
-		Background(colorFocusBg).
-		Padding(0, 2).
-		Render(btnText))
 
-	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(labelColor).Bold(it.Kind != kindInfo)
 	descStyle := lipgloss.NewStyle().Foreground(colorSubtext)
 
 	left := lipgloss.JoinVertical(lipgloss.Left,
-		labelStyle.Render(label),
-		descStyle.Render(desc),
+		cursor+labelStyle.Render(it.Label),
+		"  "+descStyle.Render(it.Desc),
 	)
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, strings.Repeat(" ", 2), btn) + "\n"
+
+	if it.Kind == kindInfo || valStr == "" {
+		return left
+	}
+
+	// Right column: control widget
+	ctrl := m.renderSettingsControl(it, valStr, focused)
+	leftW := w - lipgloss.Width(ctrl) - 4
+	if leftW < 20 {
+		leftW = 20
+	}
+	leftFixed := lipgloss.NewStyle().Width(leftW).Render(left)
+	return lipgloss.JoinHorizontal(lipgloss.Center, leftFixed, ctrl)
 }
 
-func settingsDivider(w int) string {
-	return lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat("─", w)) + "\n\n"
+// renderSettingsControl renders the right-hand control widget for a row.
+func (m Model) renderSettingsControl(it settingsItem, val string, focused bool) string {
+	accentOrSub := colorSubtext
+	if focused {
+		accentOrSub = colorAccent
+	}
+	pillBg := colorFocusBg
+	if focused {
+		pillBg = colorSearchBg
+	}
+
+	switch it.Kind {
+	case kindToggle:
+		on := val == "On"
+		var s string
+		if on {
+			s = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("● On ")
+		} else {
+			s = lipgloss.NewStyle().Foreground(colorSubtext).Render("○ Off")
+		}
+		return m.zone.Mark(it.ZoneID,
+			lipgloss.NewStyle().Background(pillBg).Padding(0, 1).Render(s))
+
+	case kindCycle:
+		label := lipgloss.NewStyle().Foreground(colorText).Bold(true).Render(val)
+		arrow := lipgloss.NewStyle().Foreground(accentOrSub).Render(" ↻")
+		return m.zone.Mark(it.ZoneID,
+			lipgloss.NewStyle().Background(pillBg).Padding(0, 1).Render(label+arrow))
+
+	case kindValue:
+		decBtn := m.zone.Mark(it.ZoneID+"_dec",
+			lipgloss.NewStyle().Foreground(accentOrSub).Background(colorFocusBg).Padding(0, 1).Render("−"))
+		valLabel := lipgloss.NewStyle().Foreground(colorText).Bold(true).Width(9).Align(lipgloss.Center).Render(val)
+		incBtn := m.zone.Mark(it.ZoneID+"_inc",
+			lipgloss.NewStyle().Foreground(accentOrSub).Background(colorFocusBg).Padding(0, 1).Render("+"))
+		return lipgloss.JoinHorizontal(lipgloss.Center, decBtn, valLabel, incBtn)
+
+	case kindAction:
+		danger := it.ZoneID == "settings_clear_cache" || it.ZoneID == "settings_clear_session"
+		btnColor := colorAccent
+		if danger {
+			btnColor = lipgloss.Color("#FF4444")
+		}
+		return m.zone.Mark(it.ZoneID,
+			lipgloss.NewStyle().Foreground(btnColor).Background(pillBg).Padding(0, 2).Render("⏎ Activate"))
+	}
+	return ""
 }
 
-// ── Account tab ──────────────────────────────────────────────────────────────
+// settingsRowVal returns the current display value for a settings item.
+func (m Model) settingsRowVal(it settingsItem) string {
+	switch it.ZoneID {
+	// toggles
+	case "settings_history", "settings_remember_pos":
+		return "Off" // placeholders
+	case "settings_normalize":
+		if m.normalize { return "On" }; return "Off"
+	case "settings_silence":
+		if m.silenceSkip { return "On" }; return "Off"
+	case "settings_shuffle":
+		if m.shuffle { return "On" }; return "Off"
+	case "settings_crossfade":
+		if m.crossfade { return "On" }; return "Off"
+	case "settings_toggle_queue":
+		if !m.queuePanelHidden { return "On" }; return "Off"
 
-func (m Model) renderSettingsAccount(w int) string {
+	// cycles
+	case "settings_repeat":
+		return []string{"Off", "All", "One"}[m.repeatMode]
+	case "settings_eq":
+		return eqPresets[m.eqPreset].Name
+	case "settings_crossfade_val":
+		return m.crossfadeSecLabel()
+	case "settings_sleep":
+		if m.sleepMinutes == 0 { return "Off" }
+		return fmt.Sprintf("%d min", m.sleepMinutes)
+	case "settings_dl_quality":
+		return "Best Available"
+
+	// values
+	case "settings_tempo_val":
+		return fmt.Sprintf("%.2f×", m.tempo)
+	case "settings_pitch_val":
+		return fmt.Sprintf("%+.1f st", m.pitch)
+
+	// actions
+	case "settings_oauth":
+		return ""
+	case "settings_tempo_reset", "settings_open_downloads",
+		"settings_cache_size", "settings_clear_cache", "settings_clear_session":
+		return ""
+	}
+	return ""
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab content renderers
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (m Model) renderSettingsAccount(w int, items []settingsItem) string {
 	var sb strings.Builder
-
 	sb.WriteString(settingsSectionHeader("Account"))
 
-	// Auth state card
-	var authContent string
-	switch {
-	case m.oauthState == 0:
-		statusLine := lipgloss.NewStyle().Foreground(colorSubtext).Render("Not signed in")
-		btn := m.zone.Mark("settings_oauth", lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorAccent).
-			Background(colorFocusBg).
-			Padding(0, 3).
-			Render("Sign in to YouTube Music"))
-		authContent = lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("YouTube Music Account"),
-			statusLine, "",
-			btn,
-		)
-	case m.oauthState == 1:
-		authContent = lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Step 1 of 2 — Google Cloud Client ID"),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render("Create an OAuth app at console.cloud.google.com"),
-			"",
-			m.oauthInput.View(),
-			"",
-			lipgloss.NewStyle().Foreground(colorDivider).Render("Press Enter to continue  ·  Esc to cancel"),
-		)
-	case m.oauthState == 2:
-		authContent = lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Step 2 of 2 — Client Secret"),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render("Found in the same OAuth credentials screen"),
-			"",
-			m.oauthInput.View(),
-			"",
-			lipgloss.NewStyle().Foreground(colorDivider).Render("Press Enter to continue  ·  Esc to cancel"),
-		)
-	case m.oauthState == 3 && m.oauthCodeResp != nil:
-		codeStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Background(colorFocusBg).Padding(0, 2)
-		authContent = lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Open this link in your browser:"),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render(m.oauthCodeResp.VerificationURL),
-			"",
-			lipgloss.NewStyle().Foreground(colorSubtext).Render("Then enter this code:"),
-			codeStyle.Render("  "+m.oauthCodeResp.UserCode+"  "),
-			"",
-			lipgloss.NewStyle().Foreground(colorDivider).Render("Waiting for you to complete sign-in in the browser…"),
-		)
-	default:
-		authContent = lipgloss.NewStyle().Foreground(colorSubtext).Render("Authorizing…")
+	// OAuth state machine card (replaces the normal row when active)
+	if m.oauthState > 0 {
+		sb.WriteString(settingsCard(w, m.renderOAuthFlow()))
+	} else {
+		rows := m.renderItemGroup(items, []int{0}, w)
+		sb.WriteString(settingsCard(w, rows))
 	}
-
-	sb.WriteString(settingsCard(w, authContent))
 
 	sb.WriteString(settingsSectionHeader("Privacy"))
-	privacyContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsToggleRow(
-			"Send listening history",
-			"Allows YouTube Music to use your listening history for recommendations",
-			"settings_history", false,
-		),
-	)
-	sb.WriteString(settingsCard(w, privacyContent))
-
-	return sb.String()
-}
-
-// ── Playback tab ─────────────────────────────────────────────────────────────
-
-func (m Model) renderSettingsPlayback(w int) string {
-	var sb strings.Builder
-	repeatLabels := []string{"Off", "All", "One"}
-
-	sb.WriteString(settingsSectionHeader("Queue & Navigation"))
-	queueContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsCycleRow(
-			"Repeat Mode",
-			"Loop the queue, or loop the current track",
-			repeatLabels[m.repeatMode], "settings_repeat",
-		),
-		settingsDivider(w-8),
-		m.settingsToggleRow(
-			"Shuffle",
-			"Play tracks in random order",
-			"settings_shuffle", m.shuffle,
-		),
-	)
-	sb.WriteString(settingsCard(w, queueContent))
-
-	sb.WriteString(settingsSectionHeader("Crossfade"))
-	crossfadeContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsToggleRow(
-			"Enable Crossfade",
-			"Smoothly blend between tracks at the end of each song",
-			"settings_crossfade", m.crossfade,
-		),
-	)
-	if m.crossfade {
-		crossfadeContent = lipgloss.JoinVertical(lipgloss.Left,
-			crossfadeContent,
-			settingsDivider(w-8),
-			m.settingsValueRow(
-				"Duration",
-				"How many seconds the fade overlap lasts",
-				m.crossfadeSecLabel(),
-				"settings_crossfade_dec", "settings_crossfade_inc",
-			),
-		)
-	}
-	sb.WriteString(settingsCard(w, crossfadeContent))
-
-	sb.WriteString(settingsSectionHeader("Sleep Timer"))
-	sleepLabel := "Off"
-	if m.sleepMinutes > 0 {
-		sleepLabel = fmt.Sprintf("%d min", m.sleepMinutes)
-	}
-	sleepContent := m.settingsCycleRow(
-		"Sleep Timer",
-		"Automatically pause after the selected time",
-		sleepLabel, "settings_sleep",
-	)
-	sb.WriteString(settingsCard(w, sleepContent))
-
-	return sb.String()
-}
-
-// ── Audio tab ────────────────────────────────────────────────────────────────
-
-func (m Model) renderSettingsAudio(w int) string {
-	var sb strings.Builder
-
-	sb.WriteString(settingsSectionHeader("Sound Processing"))
-	soundContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsToggleRow(
-			"Loudness Normalization",
-			"Level out volume differences between tracks",
-			"settings_normalize", m.normalize,
-		),
-		settingsDivider(w-8),
-		m.settingsToggleRow(
-			"Silence Skip",
-			"Automatically jump over silent passages",
-			"settings_silence", m.silenceSkip,
-		),
-	)
-	sb.WriteString(settingsCard(w, soundContent))
-
-	sb.WriteString(settingsSectionHeader("Tempo & Pitch"))
-	tpContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsValueRow(
-			"Playback Speed",
-			"Adjust how fast or slow tracks play (0.25× – 4.00×)",
-			fmt.Sprintf("%.2f×", m.tempo),
-			"settings_tempo_dec", "settings_tempo_inc",
-		),
-		settingsDivider(w-8),
-		m.settingsValueRow(
-			"Pitch Shift",
-			"Shift pitch up or down in semitones (−12 to +12)",
-			fmt.Sprintf("%+.1f st", m.pitch),
-			"settings_pitch_dec", "settings_pitch_inc",
-		),
-		settingsDivider(w-8),
-		m.settingsActionRow(
-			"Reset Both",
-			"Restore speed to 1.00× and pitch to 0 semitones",
-			"Reset to Default", "settings_tempo_reset", false,
-		),
-	)
-	sb.WriteString(settingsCard(w, tpContent))
-
-	sb.WriteString(settingsSectionHeader("Equalizer"))
-	eqContent := m.settingsCycleRow(
-		"EQ Preset",
-		"Applies an audio filter preset to the current and future tracks",
-		eqPresets[m.eqPreset].Name, "settings_eq",
-	)
-	sb.WriteString(settingsCard(w, eqContent))
-
-	sb.WriteString(lipgloss.NewStyle().
-		Foreground(colorDivider).
-		Render("Keyboard shortcuts:  o norm  ·  </>  tempo  ·  {/}  pitch  ·  E  EQ  ·  x  crossfade"))
-
-	return sb.String()
-}
-
-// ── Downloads & Storage tab ──────────────────────────────────────────────────
-
-func (m Model) renderSettingsDownloads(w int) string {
-	var sb strings.Builder
-
-	sb.WriteString(settingsSectionHeader("Offline Storage"))
-
-	storageContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsActionRow(
-			"Download Location",
-			"Where cached audio files are saved  (./downloads/)",
-			"Open Folder", "settings_open_downloads", false,
-		),
-		settingsDivider(w-8),
-		m.settingsActionRow(
-			"Cache Size",
-			"Audio files stored locally for offline playback",
-			"Calculate", "settings_cache_size", false,
-		),
-		settingsDivider(w-8),
-		m.settingsActionRow(
-			"Clear Cache",
-			"Delete all downloaded audio files",
-			"Clear All", "settings_clear_cache", true,
-		),
-	)
-	sb.WriteString(settingsCard(w, storageContent))
-
-	sb.WriteString(settingsSectionHeader("Download Quality"))
-	qualityContent := m.settingsCycleRow(
-		"Audio Quality",
-		"Format preference when downloading for offline use",
-		"Best Available", "settings_dl_quality",
-	)
-	sb.WriteString(settingsCard(w, qualityContent))
+	rows := m.renderItemGroup(items, []int{1}, w)
+	sb.WriteString(settingsCard(w, rows))
 
 	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).
-		Render("Offline download is available once you have signed in to your account."))
-
+		Render("Press Enter on 'Sign in' to start the browser OAuth flow."))
 	return sb.String()
 }
 
-// ── General tab ──────────────────────────────────────────────────────────────
+func (m Model) renderOAuthFlow() string {
+	switch {
+	case m.oauthState == 1:
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Step 1 / 2 — Google OAuth Client ID"),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render("Create credentials at console.cloud.google.com"),
+			"",
+			m.oauthInput.View(),
+			"",
+			lipgloss.NewStyle().Foreground(colorDivider).Render("Enter to continue  ·  Esc to cancel"),
+		)
+	case m.oauthState == 2:
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Step 2 / 2 — Client Secret"),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render("Found in the same credentials screen"),
+			"",
+			m.oauthInput.View(),
+			"",
+			lipgloss.NewStyle().Foreground(colorDivider).Render("Enter to continue  ·  Esc to cancel"),
+		)
+	case m.oauthState == 3 && m.oauthCodeResp != nil:
+		codeStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).
+			Background(colorFocusBg).Padding(0, 2)
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Open this URL in your browser:"),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render(m.oauthCodeResp.VerificationURL),
+			"",
+			lipgloss.NewStyle().Foreground(colorSubtext).Render("Enter this code:"),
+			codeStyle.Render("  "+m.oauthCodeResp.UserCode+"  "),
+			"",
+			lipgloss.NewStyle().Foreground(colorDivider).Render("Waiting for browser authorisation…"),
+		)
+	}
+	return lipgloss.NewStyle().Foreground(colorSubtext).Render("Authorising…")
+}
 
-func (m Model) renderSettingsGeneral(w int) string {
+func (m Model) renderSettingsPlayback(w int, items []settingsItem) string {
 	var sb strings.Builder
+	sb.WriteString(settingsSectionHeader("Queue & Navigation"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{0, 1}, w)))
 
+	sb.WriteString(settingsSectionHeader("Crossfade"))
+	crossfadeIdxs := []int{2}
+	for i, it := range items {
+		if it.ZoneID == "settings_crossfade_val" {
+			crossfadeIdxs = append(crossfadeIdxs, i)
+			break
+		}
+	}
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, crossfadeIdxs, w)))
+
+	// sleep timer is always last
+	lastIdx := len(items) - 1
+	sb.WriteString(settingsSectionHeader("Sleep Timer"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{lastIdx}, w)))
+	return sb.String()
+}
+
+func (m Model) renderSettingsAudio(w int, items []settingsItem) string {
+	var sb strings.Builder
+	sb.WriteString(settingsSectionHeader("Sound Processing"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{0, 1}, w)))
+
+	sb.WriteString(settingsSectionHeader("Tempo & Pitch"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{2, 3, 4}, w)))
+
+	sb.WriteString(settingsSectionHeader("Equalizer"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{5}, w)))
+
+	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).
+		Render("Keyboard: o norm  ·  </> tempo  ·  {/} pitch  ·  E EQ  ·  x crossfade"))
+	return sb.String()
+}
+
+func (m Model) renderSettingsDownloads(w int, items []settingsItem) string {
+	var sb strings.Builder
+	sb.WriteString(settingsSectionHeader("Offline Storage"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{0, 1, 2}, w)))
+
+	sb.WriteString(settingsSectionHeader("Download Quality"))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{3}, w)))
+
+	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).
+		Render("Offline download requires a signed-in YouTube Music account."))
+	return sb.String()
+}
+
+func (m Model) renderSettingsGeneral(w int, items []settingsItem) string {
+	var sb strings.Builder
 	sb.WriteString(settingsSectionHeader("Appearance"))
-	appearContent := m.settingsToggleRow(
-		"Show Queue Panel",
-		"Display the queue / lyrics panel in the right sidebar",
-		"settings_toggle_queue", !m.queuePanelHidden,
-	)
-	sb.WriteString(settingsCard(w, appearContent))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{0}, w)))
 
 	sb.WriteString(settingsSectionHeader("Session"))
-	sessionContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.settingsToggleRow(
-			"Remember Playback Position",
-			"Resume from where you left off on restart",
-			"settings_remember_pos", true,
-		),
-		settingsDivider(w-8),
-		m.settingsActionRow(
-			"Clear Session",
-			"Reset the queue, history and resume position",
-			"Clear", "settings_clear_session", true,
-		),
-	)
-	sb.WriteString(settingsCard(w, sessionContent))
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{1, 2}, w)))
 
 	sb.WriteString(settingsSectionHeader("About"))
-	aboutContent := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("go-ytm"),
-		lipgloss.NewStyle().Foreground(colorSubtext).Render("Terminal YouTube Music client"),
-		"",
-		lipgloss.NewStyle().Foreground(colorDivider).Render("Built with mpv · ytmusicapi · kkdai/youtube · bubbletea"),
-	)
-	sb.WriteString(settingsCard(w, aboutContent))
-
+	sb.WriteString(settingsCard(w, m.renderItemGroup(items, []int{3}, w)))
 	return sb.String()
+}
+
+// renderItemGroup renders a subset of items (by index) separated by dividers.
+func (m Model) renderItemGroup(items []settingsItem, idxs []int, w int) string {
+	var parts []string
+	divStyle := lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat("─", max(10, w-6)))
+	for _, idx := range idxs {
+		if idx >= len(items) {
+			continue
+		}
+		it := items[idx]
+		val := m.settingsRowVal(it)
+		parts = append(parts, m.renderSettingsRow(it, idx, val, w-6))
+	}
+	return strings.Join(parts, "\n"+divStyle+"\n")
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -50,6 +50,7 @@ type Model struct {
 
 	oauthState        int // 0: None, 1: Entering Client ID, 2: Entering Client Secret, 3: Waiting
 	settingsTab       string
+	settingsRow       int // focused row index in the current settings tab
 	oauthInput        textinput.Model
 	oauthClientID     string
 	oauthClientSecret string
@@ -311,6 +312,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, debounceSuggestions(newVal, m.suggestionGen))
 			}
 			return m, cmd
+		}
+
+		// Settings page keyboard nav (intercept before global keys)
+		if m.activeMenu == "Settings" && !m.nowPlayingOpen && m.oauthState == 0 {
+			if mm, cmd, handled := m.HandleSettingsKey(msg.String()); handled {
+				return mm, cmd
+			}
 		}
 
 		switch msg.String() {
@@ -1397,10 +1405,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.zone.Get("settings_crossfade").InBounds(mouseMsg) {
 					mm, cmd := m.toggleCrossfade(); mm.setMainContent(); return mm, cmd
 				}
-				if m.zone.Get("settings_crossfade_dec").InBounds(mouseMsg) {
+				if m.zone.Get("settings_crossfade_dec").InBounds(mouseMsg) ||
+					m.zone.Get("settings_crossfade_val_dec").InBounds(mouseMsg) {
 					return m.stepCrossfadeSec(-1)
 				}
-				if m.zone.Get("settings_crossfade_inc").InBounds(mouseMsg) {
+				if m.zone.Get("settings_crossfade_inc").InBounds(mouseMsg) ||
+					m.zone.Get("settings_crossfade_val_inc").InBounds(mouseMsg) {
 					return m.stepCrossfadeSec(1)
 				}
 				if m.zone.Get("settings_sleep").InBounds(mouseMsg) {
