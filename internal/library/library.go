@@ -79,10 +79,17 @@ func (db *DB) Path() string {
 
 // Close closes the database.
 func (db *DB) Close() error {
-	if db == nil || db.sql == nil {
+	if db == nil {
 		return nil
 	}
-	return db.sql.Close()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.sql == nil {
+		return nil
+	}
+	err := db.sql.Close()
+	db.sql = nil
+	return err
 }
 
 func (db *DB) migrate() error {
@@ -259,6 +266,9 @@ func (db *DB) LoadSession() (*session.Snapshot, error) {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.sql == nil {
+		return nil, fmt.Errorf("library: database closed")
+	}
 
 	var snap session.Snapshot
 	var hidden, showSearch int
@@ -343,6 +353,9 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.sql == nil {
+		return fmt.Errorf("library: database closed")
+	}
 
 	tx, err := db.sql.Begin()
 	if err != nil {

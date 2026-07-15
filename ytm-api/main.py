@@ -221,8 +221,6 @@ def song(video_id: str):
             if candidate.get("videoId") == video_id:
                 tr = candidate
                 break
-        if tr is None and tracks:
-            tr = tracks[0]
         if tr:
             out["title"] = tr.get("title") or ""
             out["artists"] = [
@@ -328,6 +326,9 @@ def song(video_id: str):
 
     if not out["duration"] and out["durationSeconds"]:
         out["duration"] = _format_secs(int(out["durationSeconds"]))
+
+    if not (out.get("title") or "").strip():
+        raise HTTPException(status_code=404, detail="song metadata unavailable")
 
     return out
 

@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	youtube "github.com/kkdai/youtube/v2"
 )
@@ -20,7 +22,10 @@ type Extractor struct {
 
 func NewExtractor() *Extractor {
 	return &Extractor{
-		client: &youtube.Client{},
+		client: &youtube.Client{
+			// Bound orphaned GetVideo work after ctx cancel (library ignores cancel).
+			HTTPClient: &http.Client{Timeout: 18 * time.Second},
+		},
 	}
 }
 
@@ -96,8 +101,12 @@ func (e *Extractor) getStreamURLYoutubeClient(ctx context.Context, videoID strin
 
 	select {
 	case <-ctx.Done():
+		// Return immediately; HTTPClient timeout bounds the orphaned GetVideo.
 		return "", ctx.Err()
 	case r := <-ch:
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return r.url, r.err
 	}
 }

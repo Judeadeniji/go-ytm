@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const maxAPIBody = 8 << 20 // 8 MiB
+
 // Client is a thin HTTP client for the Python ytm-api.
 type Client struct {
 	baseURL    string
@@ -40,9 +42,12 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIBody+1))
 	if err != nil {
 		return fmt.Errorf("ytm-api read: %w", err)
+	}
+	if len(body) > maxAPIBody {
+		return fmt.Errorf("ytm-api response too large")
 	}
 
 	if resp.StatusCode != http.StatusOK {
