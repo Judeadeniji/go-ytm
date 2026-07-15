@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -87,6 +88,8 @@ type Model struct {
 	playDuration     float64
 	scrubbing        bool    // true while dragging/clicking the progress bar
 	scrubPos         float64 // preview position while scrubbing
+	volume           float64 // 0–100 UI/mpv volume
+	muted            bool
 	queuePanelHidden bool    // user dismissed the right rail
 	playGen          int     // bumped on each play request; ignores stale extracts
 	playCancel       context.CancelFunc
@@ -109,8 +112,9 @@ type Model struct {
 
 	sessionStore *library.DB
 	sessionDirty bool
-	audioLoaded  bool    // mpv has the current track loaded
-	resumeSeek   float64 // seek here after load (session restore)
+	audioLoaded     bool    // mpv has the current track loaded
+	resumeSeek      float64 // seek here after load (session restore)
+	resumeSeekTries int     // remaining progress-tick seek nudges
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
@@ -171,8 +175,10 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		statusMsg:         status,
 		queue:             Queue{current: -1},
 		progress:          newProgressBar(40),
+		volume:            100,
 		sessionStore:      store,
 		lyricsFollow:      true,
+		lyricsCursor:      -1,
 	}
 }
 
@@ -240,6 +246,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.audioLoaded && m.player != nil {
 				if pos, err := m.player.PositionSeconds(); err == nil && pos >= 0 {
 					m.playPos = pos
+				}
+				if dur, err := m.player.DurationSeconds(); err == nil && dur > 0 {
+					m.playDuration = dur
 				}
 			}
 			m.markSessionDirty()
@@ -354,9 +363,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.playPrev()
 		case "enter":
 			if m.nowPlayingOpen {
+				if m.activePane == PaneQueue {
+					return m.activateFocused()
+				}
+				if len(m.lyricsLines) > 0 {
+					cur := m.lyricsCursor
+					if cur < 0 || m.lyricsFollow {
+						pos := time.Duration(m.playPos * float64(time.Second))
+						cur = lyrics.ActiveLineIndex(m.lyricsLines, pos)
+					}
+					return m.seekToLyricsLine(cur)
+				}
 				return m, nil
 			}
 			return m.activateFocused()
+		case "c", "r":
+			if m.nowPlayingOpen && m.activePane != PaneQueue {
+				m.resyncLyricsFollow()
+				m.syncLyricsFollowOffset()
+				m.statusMsg = "Lyrics following"
+				return m, nil
+			}
+			return m, nil
+		case "-":
+			return m.adjustVolume(-5)
+		case "=", "+":
+			return m.adjustVolume(5)
+		case "m":
+			return m.toggleMute()
 		case ",":
 			if m.currentTrack != nil {
 				return m, tea.Batch(seekCmd(m.player, -5), fetchPlayProgress(m.player))
@@ -397,8 +431,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "up", "k":
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
-				m.lyricsFollow = false
-				m.lyricsViewport.LineUp(1)
+				m.moveLyricsCursor(-1)
 				return m, nil
 			}
 			if mm, handled := m.moveListFocus(-1); handled {
@@ -407,8 +440,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "down", "j":
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
-				m.lyricsFollow = false
-				m.lyricsViewport.LineDown(1)
+				m.moveLyricsCursor(1)
 				return m, nil
 			}
 			if mm, handled := m.moveListFocus(1); handled {
@@ -417,8 +449,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "pgup", "ctrl+u":
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
-				m.lyricsFollow = false
+				m.hydrateLyricsViewport()
+				m.pauseLyricsFollow()
 				m.lyricsViewport.ViewUp()
+				if len(m.lyricsLines) > 0 {
+					m.lyricsCursor = clampIndex(m.lyricsViewport.YOffset, len(m.lyricsLines))
+				}
+				m.syncLyricsFollowOffset()
 				return m, nil
 			}
 			switch m.activePane {
@@ -432,8 +469,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "pgdown", "ctrl+d":
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
-				m.lyricsFollow = false
+				m.hydrateLyricsViewport()
+				m.pauseLyricsFollow()
 				m.lyricsViewport.ViewDown()
+				if len(m.lyricsLines) > 0 {
+					m.lyricsCursor = clampIndex(m.lyricsViewport.YOffset+m.lyricsViewport.Height-1, len(m.lyricsLines))
+				}
+				m.syncLyricsFollowOffset()
 				return m, nil
 			}
 			switch m.activePane {
@@ -466,7 +508,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.playPos < 0.5 {
 			m.playPos = 0
 		}
-		m.playDuration = 0
+		// Keep restored/session duration until mpv reports a real one.
+		if m.resumeSeek < 0.5 {
+			m.playDuration = 0
+		}
 		if msg.SeekOnlyErr {
 			m.statusMsg = "Playing (seek failed): " + msg.Track.Title
 			if m.resumeSeek >= 0.5 {
@@ -560,6 +605,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lyricsPlain = msg.Plain
 		m.lyricsLines = msg.Lines
 		m.lyricsFollow = true
+		m.lyricsIdleAt = time.Time{}
+		if len(m.lyricsLines) > 0 {
+			pos := time.Duration(m.playPos * float64(time.Second))
+			m.lyricsCursor = lyrics.ActiveLineIndex(m.lyricsLines, pos)
+		} else {
+			m.lyricsCursor = -1
+		}
 		if m.showQueuePanel() {
 			m.setQueuePanelContent()
 		}
@@ -608,7 +660,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.leftViewport.Width > 0 {
 			m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 		}
-		return m, cmd
+		var cmds []tea.Cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if m.nowPlayingOpen && m.currentTrack != nil {
+			m.lyricsFollow = true
+			m.lyricsIdleAt = time.Time{}
+			m.ensureNowPlayingLayout()
+			m.setMainContent()
+			cmds = append(cmds, m.enqueueNowPlayingImage())
+			if c := m.ensureLyricsFetched(); c != nil {
+				cmds = append(cmds, c)
+			}
+			if c := m.ensureSongDetailsFetched(); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
+		return m, tea.Batch(cmds...)
 	case sessionPersistTickMsg:
 		var cmds []tea.Cmd
 		cmds = append(cmds, tickSessionPersist())
@@ -650,24 +719,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Duration > 0 {
 				m.playDuration = msg.Duration
 			}
+			var cmds []tea.Cmd
 			// Don't fight the mouse while scrubbing the progress bar.
 			if !m.scrubbing {
 				if m.resumeSeek >= 0.5 {
-					// Ignore early near-zero readings; keep UI pinned until confirmed.
-					if msg.Pos+2 < m.resumeSeek && msg.Pos < 1.5 {
-						m.playPos = m.resumeSeek
-					} else {
+					if msg.Pos+2.5 >= m.resumeSeek {
 						m.playPos = msg.Pos
-						if msg.Pos+2 >= m.resumeSeek {
+						m.resumeSeek = 0
+						m.resumeSeekTries = 0
+						m.markSessionDirty()
+					} else {
+						// Keep restored position in UI/session until seek sticks.
+						m.playPos = m.resumeSeek
+						if m.resumeSeekTries > 0 {
+							m.resumeSeekTries--
+							cmds = append(cmds, seekAbsoluteCmd(m.player, m.resumeSeek))
+						} else {
+							// Give up nudging; follow real position so we don't soft-lock.
+							m.playPos = msg.Pos
 							m.resumeSeek = 0
+							m.markSessionDirty()
 						}
 					}
 				} else {
 					m.playPos = msg.Pos
+					m.markSessionDirty()
 				}
-				m.markSessionDirty()
 			}
-			var cmds []tea.Cmd
 			// Refetch lyrics once duration becomes known after a duration=0 fetch.
 			if msg.Duration >= 0.5 && m.lyricsFetchDur < 0.5 && m.lyricsTrackKey != "" && !m.lyricsLoading {
 				if cmd := m.ensureLyricsFetched(); cmd != nil {
@@ -909,6 +987,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if mm, cmd, handled := m.handleProgressScrub(mouseMsg); handled {
 			return mm, cmd
 		}
+		if mm, cmd, handled := m.handleLyricsWheel(mouseMsg); handled {
+			return mm, cmd
+		}
 
 		if m.searchInput.Focused() && mouseMsg.Type == tea.MouseLeft {
 			for i := range m.searchSuggestions {
@@ -919,7 +1000,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if mouseMsg.Type == tea.MouseLeft {
+		if mouseMsg.Type == tea.MouseLeft || (mouseMsg.Button == tea.MouseButtonLeft && mouseMsg.Action == tea.MouseActionPress) {
+			if mm, cmd, handled := m.handleLyricsClick(mouseMsg); handled {
+				return mm, cmd
+			}
 			if m.zone.Get("player_play").InBounds(mouseMsg) {
 				return m.togglePlayPause()
 			}
@@ -928,6 +1012,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.zone.Get("player_prev").InBounds(mouseMsg) {
 				return m.playPrev()
+			}
+			if m.zone.Get("player_vol_down").InBounds(mouseMsg) {
+				return m.adjustVolume(-5)
+			}
+			if m.zone.Get("player_vol_up").InBounds(mouseMsg) {
+				return m.adjustVolume(5)
+			}
+			if m.zone.Get("player_mute").InBounds(mouseMsg) {
+				return m.toggleMute()
 			}
 			if m.zone.Get("player_nowplaying").InBounds(mouseMsg) {
 				return m.openNowPlaying()
@@ -1046,6 +1139,7 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.isPlaying = true
 	m.audioLoaded = false
 	m.resumeSeek = 0
+	m.resumeSeekTries = 0
 	m.playPos = 0
 	m.playDuration = 0
 	m.playGen++
@@ -1233,6 +1327,8 @@ func (m *Model) resetTrackSideState() {
 	m.lyricsLoading = false
 	m.lyricsFetchDur = 0
 	m.lyricsFollow = true
+	m.lyricsCursor = -1
+	m.lyricsIdleAt = time.Time{}
 	m.songDetails = nil
 	m.songDetailsVideoID = ""
 	m.songDetailsLoading = false

@@ -241,14 +241,20 @@ func (m Model) renderRailDetails(inner int) string {
 	}
 
 	sb.WriteString(m.renderMetaRow(inner, "Status", state))
+	volLabel := fmt.Sprintf("%d%%", int(m.volume+0.5))
+	if m.muted {
+		volLabel = "Muted"
+	}
+	sb.WriteString(m.renderMetaRow(inner, "Volume", volLabel))
 	sb.WriteString(m.renderMetaRow(inner, "Position", formatClock(pos)))
-	durLabel := formatClock(m.playDuration)
-	if m.playDuration <= 0 && t.Duration != "" {
+	dur := m.effectiveDuration()
+	durLabel := formatClock(dur)
+	if dur <= 0 && t.Duration != "" {
 		durLabel = t.Duration
 	}
 	sb.WriteString(m.renderMetaRow(inner, "Duration", durLabel))
-	if m.playDuration > 0 {
-		pct := int((pos / m.playDuration) * 100)
+	if dur > 0 {
+		pct := int((pos / dur) * 100)
 		if pct < 0 {
 			pct = 0
 		}

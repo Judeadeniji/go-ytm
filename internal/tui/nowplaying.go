@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,6 +16,9 @@ const (
 	npArtWidth  = 36
 	npArtHeight = 16
 	npMinWide   = 100 // below this, stack art above lyrics
+
+	// After browsing, resume auto-follow once idle and the singing line is off-screen.
+	lyricsIdleResync = 4 * time.Second
 )
 
 func lyricsTrackKey(t *Track) string {
@@ -101,8 +105,26 @@ func (m Model) generateNowPlayingBody(width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, metaBlock, lyricsBlock)
 }
 
+func (m Model) lyricsHeaderLabel() string {
+	switch {
+	case len(m.lyricsLines) == 0 && m.lyricsPlain == "":
+		return "Lyrics"
+	case m.lyricsFollow:
+		return "Lyrics · following"
+	default:
+		return "Lyrics · browsing · c follow"
+	}
+}
+
+func (m Model) lyricsHintLine(width int) string {
+	hint := "j/k · wheel scroll · enter/click seek · c follow"
+	return lipgloss.NewStyle().Foreground(colorSubtext).MaxWidth(max(8, width)).Render(hint)
+}
+
 func (m Model) renderLyricsPane(width, height int) string {
-	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Lyrics")
+	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(m.lyricsHeaderLabel())
+	hintH := 1
+	bodyH := max(1, height-2-hintH) // header + blank + hint
 	var body string
 	switch {
 	case m.currentTrack == nil:
@@ -118,9 +140,11 @@ func (m Model) renderLyricsPane(width, height int) string {
 	case m.lyricsPlain != "":
 		plain := lipgloss.NewStyle().Foreground(colorText).Width(max(8, width)).Render(m.lyricsPlain)
 		m.lyricsViewport.Width = max(8, width)
-		m.lyricsViewport.Height = max(1, height-2)
+		m.lyricsViewport.Height = bodyH
 		m.lyricsViewport.SetContent(plain)
-		return lipgloss.JoinVertical(lipgloss.Left, header, "", safeViewportView(&m.lyricsViewport))
+		hint := m.lyricsHintLine(width)
+		view := m.zone.Mark("lyrics_pane", safeViewportView(&m.lyricsViewport))
+		return lipgloss.JoinVertical(lipgloss.Left, header, "", view, hint)
 	default:
 		body = lipgloss.NewStyle().Foreground(colorSubtext).Render("No lyrics found")
 	}
@@ -129,13 +153,17 @@ func (m Model) renderLyricsPane(width, height int) string {
 
 func (m Model) renderSyncedLyrics(width, height int, header string) string {
 	content, _ := m.buildSyncedLyricsContent(width)
+	hintH := 1
+	bodyH := max(1, height-2-hintH)
 	m.lyricsViewport.Width = max(8, width)
-	m.lyricsViewport.Height = max(1, height-2)
+	m.lyricsViewport.Height = bodyH
 	m.lyricsViewport.SetContent(content)
 	if m.lyricsFollow {
 		m.applyLyricsFollowOffset()
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", safeViewportView(&m.lyricsViewport))
+	hint := m.lyricsHintLine(width)
+	view := m.zone.Mark("lyrics_pane", safeViewportView(&m.lyricsViewport))
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", view, hint)
 }
 
 func (m Model) buildSyncedLyricsContent(width int) (string, int) {
@@ -144,20 +172,35 @@ func (m Model) buildSyncedLyricsContent(width int) (string, int) {
 		pos = time.Duration(m.scrubPos * float64(time.Second))
 	}
 	active := lyrics.ActiveLineIndex(m.lyricsLines, pos)
+	cursor := m.lyricsCursor
+	if m.lyricsFollow {
+		cursor = active
+	}
 
+	innerW := max(8, width)
 	var sb strings.Builder
 	for i, ln := range m.lyricsLines {
 		text := ln.Text
 		if text == "" {
 			text = " "
 		}
-		style := lipgloss.NewStyle().Foreground(colorSubtext).Width(max(8, width)).MaxWidth(max(8, width))
-		if i == active {
-			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Width(max(8, width)).MaxWidth(max(8, width))
-		} else if active >= 0 && absInt(i-active) == 1 {
-			style = lipgloss.NewStyle().Foreground(colorText).Width(max(8, width)).MaxWidth(max(8, width))
+		style := lipgloss.NewStyle().Foreground(colorSubtext).Width(innerW).MaxWidth(innerW)
+		prefix := "  "
+		switch {
+		case i == active && i == cursor:
+			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Width(innerW).MaxWidth(innerW)
+			prefix = "▶ "
+		case i == active:
+			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Width(innerW).MaxWidth(innerW)
+			prefix = "● "
+		case i == cursor:
+			style = lipgloss.NewStyle().Foreground(colorText).Bold(true).Width(innerW).MaxWidth(innerW)
+			prefix = "› "
+		case active >= 0 && absInt(i-active) == 1:
+			style = lipgloss.NewStyle().Foreground(colorText).Width(innerW).MaxWidth(innerW)
 		}
-		sb.WriteString(style.Render(text))
+		row := style.Render(prefix + text)
+		sb.WriteString(m.zone.Mark(fmt.Sprintf("lyrics_line_%d", i), row))
 		sb.WriteByte('\n')
 	}
 	return strings.TrimRight(sb.String(), "\n"), active
@@ -175,6 +218,7 @@ func (m *Model) applyLyricsFollowOffset() {
 	if active < 0 {
 		return
 	}
+	m.lyricsCursor = active
 	h := m.lyricsViewport.Height
 	if h < 1 {
 		h = 1
@@ -205,6 +249,7 @@ func (m *Model) syncLyricsFollowOffset() {
 		w = 8
 	}
 	if len(m.lyricsLines) > 0 {
+		m.maybeSmartLyricsResync()
 		content, _ := m.buildSyncedLyricsContent(w)
 		prev := m.lyricsViewport.YOffset
 		m.lyricsViewport.SetContent(content)
@@ -212,6 +257,7 @@ func (m *Model) syncLyricsFollowOffset() {
 			m.applyLyricsFollowOffset()
 		} else {
 			m.lyricsViewport.SetYOffset(prev)
+			m.ensureLyricsCursorVisible()
 		}
 		return
 	}
@@ -219,6 +265,196 @@ func (m *Model) syncLyricsFollowOffset() {
 		plain := lipgloss.NewStyle().Foreground(colorText).Width(w).Render(m.lyricsPlain)
 		prev := m.lyricsViewport.YOffset
 		m.lyricsViewport.SetContent(plain)
+		m.lyricsViewport.SetYOffset(prev)
+	}
+}
+
+// maybeSmartLyricsResync re-enables follow after idle when the singing line
+// left the viewport — never while the user is still looking near it.
+func (m *Model) maybeSmartLyricsResync() {
+	if m.lyricsFollow || len(m.lyricsLines) == 0 {
+		return
+	}
+	if m.lyricsIdleAt.IsZero() || time.Since(m.lyricsIdleAt) < lyricsIdleResync {
+		return
+	}
+	pos := time.Duration(m.playPos * float64(time.Second))
+	active := lyrics.ActiveLineIndex(m.lyricsLines, pos)
+	if active < 0 {
+		return
+	}
+	if m.lyricsLineVisible(active) {
+		return // still in view — don't yank scroll
+	}
+	m.lyricsFollow = true
+	m.lyricsCursor = active
+	m.lyricsIdleAt = time.Time{}
+}
+
+func (m Model) lyricsLineVisible(i int) bool {
+	if i < 0 {
+		return false
+	}
+	top := m.lyricsViewport.YOffset
+	bottom := top + m.lyricsViewport.Height
+	return i >= top && i < bottom
+}
+
+func (m *Model) ensureLyricsCursorVisible() {
+	if m.lyricsCursor < 0 || m.lyricsViewport.Height <= 0 {
+		return
+	}
+	top := m.lyricsViewport.YOffset
+	bottom := top + m.lyricsViewport.Height
+	if m.lyricsCursor < top {
+		m.lyricsViewport.SetYOffset(m.lyricsCursor)
+	} else if m.lyricsCursor >= bottom {
+		m.lyricsViewport.SetYOffset(m.lyricsCursor - m.lyricsViewport.Height + 1)
+	}
+}
+
+func (m *Model) pauseLyricsFollow() {
+	m.lyricsFollow = false
+	m.lyricsIdleAt = time.Now()
+}
+
+func (m *Model) resyncLyricsFollow() {
+	m.lyricsFollow = true
+	m.lyricsIdleAt = time.Time{}
+	if len(m.lyricsLines) > 0 {
+		pos := time.Duration(m.playPos * float64(time.Second))
+		active := lyrics.ActiveLineIndex(m.lyricsLines, pos)
+		if active >= 0 {
+			m.lyricsCursor = active
+		}
+		m.applyLyricsFollowOffset()
+	}
+}
+
+func (m *Model) moveLyricsCursor(delta int) {
+	m.hydrateLyricsViewport()
+	n := len(m.lyricsLines)
+	if n == 0 {
+		// Plain lyrics: viewport scroll only.
+		if delta < 0 {
+			m.lyricsViewport.LineUp(1)
+		} else {
+			m.lyricsViewport.LineDown(1)
+		}
+		m.pauseLyricsFollow()
+		return
+	}
+	m.pauseLyricsFollow()
+	if m.lyricsCursor < 0 {
+		pos := time.Duration(m.playPos * float64(time.Second))
+		m.lyricsCursor = lyrics.ActiveLineIndex(m.lyricsLines, pos)
+		if m.lyricsCursor < 0 {
+			m.lyricsCursor = 0
+		}
+	}
+	m.lyricsCursor = clampIndex(m.lyricsCursor+delta, n)
+	m.ensureLyricsCursorVisible()
+	m.syncLyricsFollowOffset()
+}
+
+func (m Model) seekToLyricsLine(i int) (Model, tea.Cmd) {
+	if i < 0 || i >= len(m.lyricsLines) || m.player == nil || !m.audioLoaded {
+		return m, nil
+	}
+	sec := m.lyricsLines[i].Time.Seconds()
+	m.playPos = sec
+	m.lyricsCursor = i
+	// Jumping to a line is an intentional "go here" — resume follow from that point.
+	m.lyricsFollow = true
+	m.lyricsIdleAt = time.Time{}
+	m.applyLyricsFollowOffset()
+	m.statusMsg = fmt.Sprintf("Seek %s", formatClock(sec))
+	return m, tea.Batch(seekAbsoluteCmd(m.player, sec), fetchPlayProgress(m.player))
+}
+
+// handleLyricsClick seeks when a lyrics line zone is clicked.
+func (m Model) handleLyricsClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
+	if !m.nowPlayingOpen || len(m.lyricsLines) == 0 {
+		return m, nil, false
+	}
+	// Fire on press (or legacy MouseLeft) — not on release, to avoid doubles.
+	press := msg.Action == tea.MouseActionPress ||
+		(msg.Type == tea.MouseLeft && msg.Action != tea.MouseActionRelease && msg.Action != tea.MouseActionMotion)
+	if !press {
+		return m, nil, false
+	}
+	for i := range m.lyricsLines {
+		if m.zone.Get(fmt.Sprintf("lyrics_line_%d", i)).InBounds(msg) {
+			mm, cmd := m.seekToLyricsLine(i)
+			return mm, cmd, true
+		}
+	}
+	return m, nil, false
+}
+
+// handleLyricsWheel scrolls lyrics when the pointer is over the lyrics pane.
+func (m Model) handleLyricsWheel(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
+	if !m.nowPlayingOpen || !tea.MouseEvent(msg).IsWheel() {
+		return m, nil, false
+	}
+	if !m.mouseOverLyrics(msg) {
+		return m, nil, false
+	}
+	// Content is often only set during View (on a copy); hydrate the Model
+	// viewport before scrolling so LineUp/Down actually move.
+	m.hydrateLyricsViewport()
+	m.pauseLyricsFollow()
+	var cmd tea.Cmd
+	m.lyricsViewport, cmd = m.lyricsViewport.Update(msg)
+	if len(m.lyricsLines) > 0 {
+		m.lyricsCursor = clampIndex(m.lyricsViewport.YOffset, len(m.lyricsLines))
+		m.ensureLyricsCursorVisible()
+	}
+	return m, cmd, true
+}
+
+// mouseOverLyrics reports whether the mouse is over the lyrics viewport (or
+// the NP body if the zone isn't registered yet).
+func (m Model) mouseOverLyrics(msg tea.MouseMsg) bool {
+	if z := m.zone.Get("lyrics_pane"); z != nil && !z.IsZero() {
+		return z.InBounds(msg)
+	}
+	if !m.nowPlayingOpen {
+		return false
+	}
+	barTop := m.height - playerBarHeight
+	if m.height > 0 && msg.Y >= barTop {
+		return false
+	}
+	_, _, right := m.layoutWidths()
+	if right > 0 && msg.X >= m.width-right {
+		return false
+	}
+	return true
+}
+
+// hydrateLyricsViewport pushes lyrics content + size onto Model.lyricsViewport
+// without changing follow mode (keeps the current YOffset when browsing).
+func (m *Model) hydrateLyricsViewport() {
+	m.ensureNowPlayingLayout()
+	w := m.lyricsViewport.Width
+	if w < 8 {
+		w = 8
+	}
+	prev := m.lyricsViewport.YOffset
+	switch {
+	case len(m.lyricsLines) > 0:
+		content, _ := m.buildSyncedLyricsContent(w)
+		m.lyricsViewport.SetContent(content)
+	case m.lyricsPlain != "":
+		plain := lipgloss.NewStyle().Foreground(colorText).Width(w).Render(m.lyricsPlain)
+		m.lyricsViewport.SetContent(plain)
+	default:
+		return
+	}
+	if m.lyricsFollow {
+		m.applyLyricsFollowOffset()
+	} else {
 		m.lyricsViewport.SetYOffset(prev)
 	}
 }
@@ -236,12 +472,14 @@ func (m *Model) ensureNowPlayingLayout() {
 	if w < 1 || h < 1 {
 		return
 	}
+	// Match renderLyricsPane body height: pane ≈ h-2, then −header/blank/hint.
+	bodyH := max(3, h-5)
 	if w >= npMinWide {
 		m.lyricsViewport.Width = max(24, w/2-4)
-		m.lyricsViewport.Height = max(3, h-2)
+		m.lyricsViewport.Height = bodyH
 	} else {
 		m.lyricsViewport.Width = max(8, w-4)
-		m.lyricsViewport.Height = max(3, h/2)
+		m.lyricsViewport.Height = max(3, h/2-3)
 	}
 }
 
@@ -266,6 +504,9 @@ func (m Model) openNowPlaying() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.nowPlayingOpen = true
+	m.lyricsFollow = true
+	m.lyricsIdleAt = time.Time{}
+	m.markSessionDirty()
 	m.ensureNowPlayingLayout()
 	if m.showQueuePanel() {
 		m.setQueuePanelContent()
@@ -279,6 +520,7 @@ func (m Model) openNowPlaying() (Model, tea.Cmd) {
 
 func (m Model) closeNowPlaying() Model {
 	m.nowPlayingOpen = false
+	m.markSessionDirty()
 	return m
 }
 
@@ -308,6 +550,7 @@ func (m *Model) ensureLyricsFetched() tea.Cmd {
 		m.lyricsPlain = ""
 		m.lyricsErr = ""
 		m.lyricsInstrumental = false
+		m.lyricsCursor = -1
 	}
 	m.cancelLyrics()
 	ctx, cancel := context.WithCancel(context.Background())

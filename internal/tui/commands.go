@@ -49,8 +49,8 @@ func playTrack(ext *search.Extractor, t Track, gen int, ctx context.Context) tea
 }
 
 // loadTrack loads a resolved URL into mpv and signals TrackStartedMsg.
-// When seekTo > 0, uses loadfile start= and retries an absolute seek so
-// session resume doesn't land at 0:00 on HTTP streams.
+// When seekTo > 0, uses loadfile start= then SeekUntil so session resume
+// can catch seekable HTTP streams after the demuxer settles.
 // ctx cancels mid-retry seeks when the user skips (playCancel).
 func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
@@ -71,31 +71,10 @@ func loadTrack(p *player.Player, t Track, url string, gen int, seekTo float64, c
 		}
 		var seekErr error
 		if seekTo >= 0.5 {
-			// Streams often ignore start= until demuxer settles — nudge a few times.
-			seekErr = p.SeekAbsolute(seekTo)
-			for i := 0; i < 4 && seekErr != nil; i++ {
-				select {
-				case <-ctx.Done():
-					return TrackStartedMsg{Track: t, Gen: gen, Err: ctx.Err(), SeekOnlyErr: true}
-				case <-time.After(150 * time.Millisecond):
-				}
-				if err := ctx.Err(); err != nil {
-					return TrackStartedMsg{Track: t, Gen: gen, Err: err, SeekOnlyErr: true}
-				}
-				seekErr = p.SeekAbsolute(seekTo)
-			}
-			if seekErr == nil {
-				select {
-				case <-ctx.Done():
-					return TrackStartedMsg{Track: t, Gen: gen, Err: ctx.Err(), SeekOnlyErr: true}
-				case <-time.After(100 * time.Millisecond):
-				}
-				if err := ctx.Err(); err != nil {
-					return TrackStartedMsg{Track: t, Gen: gen, Err: err, SeekOnlyErr: true}
-				}
-				if pos, perr := p.PositionSeconds(); perr == nil && pos+2 < seekTo {
-					_ = p.SeekAbsolute(seekTo)
-				}
+			deadline := time.Now().Add(12 * time.Second)
+			seekErr = p.SeekUntil(ctx, seekTo, deadline)
+			if seekErr != nil && ctx.Err() != nil {
+				return TrackStartedMsg{Track: t, Gen: gen, Err: ctx.Err(), SeekOnlyErr: true}
 			}
 		}
 		return TrackStartedMsg{Track: t, Gen: gen, Err: seekErr, SeekOnlyErr: seekErr != nil}
@@ -150,9 +129,48 @@ func seekCmd(p *player.Player, seconds float64) tea.Cmd {
 // seekAbsoluteCmd seeks to an absolute position in seconds.
 func seekAbsoluteCmd(p *player.Player, seconds float64) tea.Cmd {
 	return func() tea.Msg {
-		if err := p.SeekAbsolute(seconds); err != nil {
-			return playerErrMsg{Op: "seek", Err: err}
+		if p == nil {
+			return nil
 		}
+		// Soft-fail: HTTP demuxers often reject early seeks; UI progress retries handle resume.
+		if err := p.SeekAbsolute(seconds); err != nil {
+			_ = p.SetTimePos(seconds)
+		}
+		return nil
+	}
+}
+
+func setVolumeCmd(p *player.Player, volume float64) tea.Cmd {
+	return func() tea.Msg {
+		if p == nil {
+			return nil
+		}
+		if err := p.SetVolume(volume); err != nil {
+			return playerErrMsg{Op: "volume", Err: err}
+		}
+		return nil
+	}
+}
+
+func setMuteCmd(p *player.Player, mute bool) tea.Cmd {
+	return func() tea.Msg {
+		if p == nil {
+			return nil
+		}
+		if err := p.SetMute(mute); err != nil {
+			return playerErrMsg{Op: "mute", Err: err}
+		}
+		return nil
+	}
+}
+
+func applyVolumeStateCmd(p *player.Player, volume float64, mute bool) tea.Cmd {
+	return func() tea.Msg {
+		if p == nil {
+			return nil
+		}
+		_ = p.SetVolume(volume)
+		_ = p.SetMute(mute)
 		return nil
 	}
 }

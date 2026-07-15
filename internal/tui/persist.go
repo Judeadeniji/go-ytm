@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -55,6 +57,10 @@ func tickSessionPersist() tea.Cmd {
 }
 
 func (m Model) snapshot() session.Snapshot {
+	dur := m.playDuration
+	if dur < 0.5 {
+		dur = m.effectiveDuration()
+	}
 	snap := session.Snapshot{
 		ActiveMenu:       m.activeMenu,
 		QueuePanelHidden: m.queuePanelHidden,
@@ -66,6 +72,11 @@ func (m Model) snapshot() session.Snapshot {
 		ListCursor:       m.listCursor,
 		QueueCursor:      m.queueCursor,
 		PlayPos:          m.playPos,
+		PlayDuration:     dur,
+		Volume:           m.volume,
+		Muted:            m.muted,
+		WasPlaying:       m.isPlaying,
+		NowPlayingOpen:   m.nowPlayingOpen,
 		QueueIndex:       m.queue.CurrentIndex(),
 		ShowSearch:       len(m.searchResults) > 0,
 	}
@@ -138,9 +149,30 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	m.listCursor = snap.ListCursor
 	m.queueCursor = snap.QueueCursor
 	m.playPos = snap.PlayPos
+	m.playDuration = snap.PlayDuration
 	m.resumeSeek = snap.PlayPos
+	m.resumeSeekTries = 0
+	if snap.PlayPos >= 0.5 {
+		m.resumeSeekTries = 30 // ~15s of progress-tick nudges after resume
+	}
 	m.isPlaying = false
 	m.audioLoaded = false
+	m.nowPlayingOpen = snap.NowPlayingOpen
+
+	vol := snap.Volume
+	if vol <= 0 && !snap.Muted {
+		// Older sessions omitted volume; keep mpv default.
+		vol = 100
+	}
+	if vol < 0 {
+		vol = 0
+	}
+	if vol > 100 {
+		vol = 100
+	}
+	m.volume = vol
+	m.muted = snap.Muted
+	applyVol := applyVolumeStateCmd(m.player, m.volume, m.muted)
 
 	if len(snap.Queue) > 0 {
 		tracks := make([]Track, 0, len(snap.Queue))
@@ -167,7 +199,12 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 			cp := cur
 			m.currentTrack = &cp
 			m.statusMsg = "Ready · " + cur.Title
+			if m.playDuration < 0.5 {
+				m.playDuration = parseClock(cur.Duration)
+			}
 		}
+	} else {
+		m.nowPlayingOpen = false
 	}
 
 	m.stack.Clear()
@@ -179,27 +216,61 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 		m.stack.Push(Screen{Kind: kind, ID: n.ID, Title: n.Title})
 	}
 
+	var cmds []tea.Cmd
+	cmds = append(cmds, applyVol)
+
+	if snap.WasPlaying && m.currentTrack != nil {
+		cmds = append(cmds, m.cmdResumeUnloadedTrack())
+	}
+
 	// Re-fetch the top of the stack so the page is live again.
 	if sc, ok := m.stack.Current(); ok && sc.ID != "" {
 		m.navGen++
 		m.pageLoading = true
 		switch sc.Kind {
 		case ScreenArtist:
-			return fetchArtist(m.ytmapiClient, sc.ID, m.navGen)
+			cmds = append(cmds, fetchArtist(m.ytmapiClient, sc.ID, m.navGen))
 		case ScreenAlbum:
-			return fetchAlbum(m.ytmapiClient, sc.ID, m.navGen)
+			cmds = append(cmds, fetchAlbum(m.ytmapiClient, sc.ID, m.navGen))
 		case ScreenPlaylist:
-			return fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen)
+			cmds = append(cmds, fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen))
 		}
+		return tea.Batch(cmds...)
 	}
 
 	if m.lastSearchQuery != "" && m.stack.IsHome() && snap.ShowSearch {
 		m.navGen++
 		m.pageLoading = true
-		// Prefer restoring a prior search results list over empty home.
-		return doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen)
+		cmds = append(cmds, doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen))
 	}
-	return nil
+	return tea.Batch(cmds...)
+}
+
+// cmdResumeUnloadedTrack starts extraction+load for a restored track that is not yet in mpv.
+func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
+	if m.currentTrack == nil || m.audioLoaded {
+		return nil
+	}
+	t := *m.currentTrack
+	if m.resumeSeek < 0.5 && m.playPos >= 0.5 {
+		m.resumeSeek = m.playPos
+	}
+	if m.resumeSeek >= 0.5 && m.resumeSeekTries <= 0 {
+		m.resumeSeekTries = 30
+	}
+	m.isPlaying = true
+	m.playGen++
+	gen := m.playGen
+	m.cancelPlayExtract()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.playCancel = cancel
+	m.playCtx = ctx
+	if m.resumeSeek >= 0.5 {
+		m.statusMsg = fmt.Sprintf("Resuming at %s: %s", formatClock(m.resumeSeek), t.Title)
+	} else {
+		m.statusMsg = "Resuming: " + t.Title
+	}
+	return playTrack(m.extractor, t, gen, ctx)
 }
 
 func (m *Model) markSessionDirty() {
