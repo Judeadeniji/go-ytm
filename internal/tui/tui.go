@@ -49,16 +49,17 @@ type Model struct {
 	zone              *zone.Manager
 
 	oauthState        int // 0: None, 1: Entering Client ID, 2: Entering Client Secret, 3: Waiting
+	settingsTab       string
 	oauthInput        textinput.Model
 	oauthClientID     string
 	oauthClientSecret string
 	oauthCodeResp     *ytmapi.OAuthCodeResponse
 
-	searchResults    []ytmapi.SearchResult
-	searchFilter     string // api filter: "", songs, albums, artists, playlists
-	lastSearchQuery  string
-	ytmapiClient     *ytmapi.Client
-	lyricsClient     *lyrics.Client
+	searchResults   []ytmapi.SearchResult
+	searchFilter    string // api filter: "", songs, albums, artists, playlists
+	lastSearchQuery string
+	ytmapiClient    *ytmapi.Client
+	lyricsClient    *lyrics.Client
 
 	player    *player.Player
 	extractor *search.Extractor
@@ -121,25 +122,25 @@ type Model struct {
 	lastRailClockSec int // throttles rail rebuilds to once per displayed second
 
 	// Navigation / detail pages
-	stack        ViewStack
-	navGen       int // bumped on each page/search fetch; ignores stale replies
-	pageLoading  bool
-	pageErr      string
-	artistPage   *ytmapi.ArtistPage
-	albumPage    *ytmapi.AlbumPage
-	playlistPage *ytmapi.PlaylistPage
-	trackCursor   int // focus index within playlist/album tracklist
-	listCursor    int // search / artist / sidebar / suggestions
+	stack          ViewStack
+	navGen         int // bumped on each page/search fetch; ignores stale replies
+	pageLoading    bool
+	pageErr        string
+	artistPage     *ytmapi.ArtistPage
+	albumPage      *ytmapi.AlbumPage
+	playlistPage   *ytmapi.PlaylistPage
+	trackCursor    int // focus index within playlist/album tracklist
+	listCursor     int // search / artist / sidebar / suggestions
 	homeCardCursor int // card index within active home carousel
-	queueCursor   int // focus in queue panel (separate from playing index)
-	railTab       RailTab
+	queueCursor    int // focus in queue panel (separate from playing index)
+	railTab        RailTab
 
-	sessionStore *library.DB
-	sessionDirty bool
-	lastSessionPosSec int // throttle play_pos session dirty to 1Hz
-	audioLoaded     bool    // mpv has the current track loaded
-	resumeSeek      float64 // seek here after load (session restore)
-	resumeSeekTries int     // remaining progress-tick seek nudges
+	sessionStore      *library.DB
+	sessionDirty      bool
+	lastSessionPosSec int     // throttle play_pos session dirty to 1Hz
+	audioLoaded       bool    // mpv has the current track loaded
+	resumeSeek        float64 // seek here after load (session restore)
+	resumeSeekTries   int     // remaining progress-tick seek nudges
 
 	navCancel context.CancelFunc
 	navCtx    context.Context
@@ -203,6 +204,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		lyricsViewport:    viewport.New(0, 0),
 		searchInput:       ti,
 		oauthInput:        oti,
+		settingsTab:       "account",
 		zone:              zone.New(),
 		searchResults:     nil,
 		ytmapiClient:      apiClient,
@@ -1244,7 +1246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, debounceImagesRedraw()
 		}
 		return m, nil
-	
+
 	case oauthCodeMsg:
 		if msg.err != nil {
 			m.oauthState = 0
@@ -1360,37 +1362,84 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if m.activeMenu == "Settings" && !m.nowPlayingOpen {
+				// ── Tab switching ───────────────────────────────────────────
+				for _, tab := range settingsTabs {
+					if m.zone.Get("settings_tab_" + tab.ID).InBounds(mouseMsg) {
+						m.settingsTab = tab.ID
+						m.setMainContent()
+						return m, nil
+					}
+				}
+
+				// ── Account tab ─────────────────────────────────────────────
 				if m.zone.Get("settings_oauth").InBounds(mouseMsg) {
 					m.oauthState = 1
+					m.oauthInput.Placeholder = "Client ID"
+					m.oauthInput.Reset()
 					m.oauthInput.Focus()
 					m.setMainContent()
 					return m, textinput.Blink
 				}
-				if m.zone.Get("settings_normalize").InBounds(mouseMsg) {
-					return m.toggleNormalize()
+				if m.zone.Get("settings_toggle_queue").InBounds(mouseMsg) {
+					m.queuePanelHidden = !m.queuePanelHidden
+					m.markSessionDirty()
+					m.setMainContent()
+					return m, nil
 				}
-				if m.zone.Get("settings_silence").InBounds(mouseMsg) {
-					return m.toggleSilenceSkip()
-				}
-				if m.zone.Get("settings_tempo").InBounds(mouseMsg) {
-					mm, cmd := m.resetTempo()
-					return mm, cmd
-				}
-				if m.zone.Get("settings_pitch").InBounds(mouseMsg) {
-					mm, cmd := m.resetPitch()
-					return mm, cmd
-				}
-				if m.zone.Get("settings_eq").InBounds(mouseMsg) {
-					return m.cycleEQPreset()
-				}
-				if m.zone.Get("settings_crossfade").InBounds(mouseMsg) {
-					return m.toggleCrossfade()
-				}
+
+				// ── Playback tab ────────────────────────────────────────────
 				if m.zone.Get("settings_repeat").InBounds(mouseMsg) {
-					return m.cycleRepeatMode()
+					mm, cmd := m.cycleRepeatMode(); mm.setMainContent(); return mm, cmd
 				}
 				if m.zone.Get("settings_shuffle").InBounds(mouseMsg) {
-					return m.toggleShuffle()
+					mm, cmd := m.toggleShuffle(); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_crossfade").InBounds(mouseMsg) {
+					mm, cmd := m.toggleCrossfade(); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_crossfade_dec").InBounds(mouseMsg) {
+					return m.stepCrossfadeSec(-1)
+				}
+				if m.zone.Get("settings_crossfade_inc").InBounds(mouseMsg) {
+					return m.stepCrossfadeSec(1)
+				}
+				if m.zone.Get("settings_sleep").InBounds(mouseMsg) {
+					mm, cmd := m.cycleSleepTimer(); mm.setMainContent(); return mm, cmd
+				}
+
+				// ── Audio tab ───────────────────────────────────────────────
+				if m.zone.Get("settings_normalize").InBounds(mouseMsg) {
+					mm, cmd := m.toggleNormalize(); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_silence").InBounds(mouseMsg) {
+					mm, cmd := m.toggleSilenceSkip(); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_tempo_dec").InBounds(mouseMsg) {
+					mm, cmd := m.adjustTempo(-0.05); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_tempo_inc").InBounds(mouseMsg) {
+					mm, cmd := m.adjustTempo(0.05); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_pitch_dec").InBounds(mouseMsg) {
+					mm, cmd := m.adjustPitch(-1); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_pitch_inc").InBounds(mouseMsg) {
+					mm, cmd := m.adjustPitch(1); mm.setMainContent(); return mm, cmd
+				}
+				if m.zone.Get("settings_tempo_reset").InBounds(mouseMsg) {
+					mm, c1 := m.resetTempo()
+					mmm, c2 := mm.resetPitch()
+					mmm.setMainContent()
+					return mmm, tea.Batch(c1, c2)
+				}
+				if m.zone.Get("settings_eq").InBounds(mouseMsg) {
+					mm, cmd := m.cycleEQPreset(); mm.setMainContent(); return mm, cmd
+				}
+
+				// ── General tab ─────────────────────────────────────────────
+				if m.zone.Get("settings_clear_session").InBounds(mouseMsg) {
+					m.statusMsg = "Session cleared"
+					return m, nil
 				}
 			}
 
@@ -1405,7 +1454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Sidebar menu items
 			for _, item := range m.menuItems {
-				if m.zone.Get("menu_"+item).InBounds(mouseMsg) {
+				if m.zone.Get("menu_" + item).InBounds(mouseMsg) {
 					if item == "Home" {
 						m = m.goHome()
 						m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
@@ -1428,7 +1477,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			for i, carousel := range m.homeCarousels {
 				title := carousel.Title
-				if m.zone.Get(title+"_left").InBounds(mouseMsg) {
+				if m.zone.Get(title + "_left").InBounds(mouseMsg) {
 					m.activeCarousel = i
 					m.activePane = PaneMain
 					if m.carouselOffsets[title] > 0 {
@@ -1438,7 +1487,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.enqueueVisibleImages(m.mainWidth())
 				}
 
-				if m.zone.Get(title+"_right").InBounds(mouseMsg) {
+				if m.zone.Get(title + "_right").InBounds(mouseMsg) {
 					m.activeCarousel = i
 					m.activePane = PaneMain
 					maxLen := len(carousel.Contents)
@@ -1452,13 +1501,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.artistPage != nil && m.currentScreen() == screenArtist {
 				checkArtistCarousel := func(title string, maxLen int) bool {
-					if m.zone.Get(title+"_left").InBounds(mouseMsg) {
-						if m.carouselOffsets[title] > 0 { m.carouselOffsets[title]-- }
+					if m.zone.Get(title + "_left").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] > 0 {
+							m.carouselOffsets[title]--
+						}
 						m.setMainContent()
 						return true
 					}
-					if m.zone.Get(title+"_right").InBounds(mouseMsg) {
-						if m.carouselOffsets[title] < maxLen-1 { m.carouselOffsets[title]++ }
+					if m.zone.Get(title + "_right").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] < maxLen-1 {
+							m.carouselOffsets[title]++
+						}
 						m.setMainContent()
 						return true
 					}
@@ -1651,11 +1704,13 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 				if len(a.Thumbnails) > 0 {
 					queue(a.Thumbnails[len(a.Thumbnails)-1].URL, artWidth, artHeight)
 				}
-				
+
 				getThumb := func(item map[string]any) string {
 					if tList, ok := item["thumbnails"].([]any); ok && len(tList) > 0 {
 						if t, ok := tList[0].(map[string]any); ok {
-							if url, ok := t["url"].(string); ok { return url }
+							if url, ok := t["url"].(string); ok {
+								return url
+							}
 						}
 					}
 					return ""
@@ -1663,7 +1718,9 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 
 				if a.Songs != nil {
 					for i, item := range a.Songs.Results {
-						if i >= 10 { break }
+						if i >= 10 {
+							break
+						}
 						if url := getThumb(item); url != "" {
 							queue(url, sugArtWidth, sugArtHeight)
 						}
@@ -1672,20 +1729,30 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 
 				contentWidth := mainWidth - 2
 				maxVis := contentWidth / 28
-				if maxVis < 1 { maxVis = 1 }
+				if maxVis < 1 {
+					maxVis = 1
+				}
 
 				queueCarousel := func(items []map[string]any) {
 					for i, item := range items {
-						if i >= maxVis { break }
+						if i >= maxVis {
+							break
+						}
 						if url := getThumb(item); url != "" {
 							queue(url, artWidth, artHeight)
 						}
 					}
 				}
 
-				if a.Albums != nil { queueCarousel(a.Albums.Results) }
-				if a.Singles != nil { queueCarousel(a.Singles.Results) }
-				if a.Related != nil { queueCarousel(a.Related.Results) }
+				if a.Albums != nil {
+					queueCarousel(a.Albums.Results)
+				}
+				if a.Singles != nil {
+					queueCarousel(a.Singles.Results)
+				}
+				if a.Related != nil {
+					queueCarousel(a.Related.Results)
+				}
 			}
 		}
 	} else if len(m.searchResults) > 0 {
@@ -1744,8 +1811,8 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 }
 
 const (
-	imageCacheMax    = 128
-	maxQueueHistory  = 50
+	imageCacheMax   = 128
+	maxQueueHistory = 50
 )
 
 func (m *Model) cancelPlayExtract() {

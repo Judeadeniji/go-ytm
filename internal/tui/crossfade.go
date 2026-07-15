@@ -77,6 +77,33 @@ func (m Model) cycleCrossfadeSec() (Model, tea.Cmd) {
 	return m, m.ensureUpcomingArmed()
 }
 
+// stepCrossfadeSec moves crossfade duration up or down one step in crossfadeSecSteps.
+func (m Model) stepCrossfadeSec(delta int) (Model, tea.Cmd) {
+	cur := session.ClampCrossfadeSec(m.crossfadeSec)
+	idx := 0
+	for i, s := range crossfadeSecSteps {
+		if s == cur {
+			idx = i
+			break
+		}
+	}
+	next := idx + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(crossfadeSecSteps) {
+		next = len(crossfadeSecSteps) - 1
+	}
+	m.setCrossfadeSec(crossfadeSecSteps[next])
+	if !m.crossfade {
+		m.setCrossfadeEnabled(true)
+	}
+	m.statusMsg = fmt.Sprintf("Crossfade · %ds", crossfadeSecSteps[next])
+	m.setQueuePanelContent()
+	m.setMainContent()
+	return m, m.ensureUpcomingArmed()
+}
+
 // clearCrossfadeArmState drops local arm flags without touching mpv.
 func (m *Model) clearCrossfadeArmState() {
 	m.armedVideoID = ""

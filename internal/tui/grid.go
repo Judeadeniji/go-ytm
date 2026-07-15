@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -246,69 +245,6 @@ func (m Model) generateExploreContent(mainWidth int) string {
 	mb.WriteString("\n\n")
 	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Moods, charts, and explore hubs land in a later pass."))
 	_ = mainWidth
-	return mb.String()
-}
-
-func (m Model) generateSettingsContent(mainWidth int) string {
-	var mb strings.Builder
-	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Settings")
-	mb.WriteString(header)
-	mb.WriteString("\n\n")
-	
-	mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Account"))
-	mb.WriteString("\n\n")
-
-	if m.oauthState == 0 {
-		btn := m.zone.Mark("settings_oauth", lipgloss.NewStyle().Foreground(colorSubtext).Render("[ Login to YouTube Music ]"))
-		mb.WriteString(btn)
-	} else if m.oauthState == 1 || m.oauthState == 2 {
-		mb.WriteString("Enter " + m.oauthInput.Placeholder + ":\n")
-		mb.WriteString(m.oauthInput.View())
-		mb.WriteString("\n(Press Esc to cancel)")
-	} else if m.oauthState == 3 && m.oauthCodeResp != nil {
-		mb.WriteString(fmt.Sprintf("1. Go to: %s\n", m.oauthCodeResp.VerificationURL))
-		mb.WriteString(fmt.Sprintf("2. Enter code: %s\n\n", lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(m.oauthCodeResp.UserCode)))
-		mb.WriteString("Waiting for authorization...")
-	}
-	mb.WriteString("\n\n")
-	
-	mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Playback"))
-	mb.WriteString("\n\n")
-
-	// Render settings options
-	renderRow := func(label, val, zoneID, hint string) string {
-		left := lipgloss.NewStyle().Width(15).Foreground(colorSubtext).Render(label)
-		right := lipgloss.NewStyle().Foreground(colorText).Render(val)
-		if zoneID != "" {
-			btn := m.zone.Mark(zoneID, lipgloss.NewStyle().Foreground(colorSubtext).Render(" ["+hint+"]"))
-			right = lipgloss.JoinHorizontal(lipgloss.Top, right, btn)
-		}
-		return lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n\n"
-	}
-	
-	normLabel := "Off"
-	if m.normalize { normLabel = "On" }
-	mb.WriteString(renderRow("Normalize:", normLabel, "settings_normalize", "toggle"))
-
-	silenceLabel := "Off"
-	if m.silenceSkip { silenceLabel = "On" }
-	mb.WriteString(renderRow("Silence Skip:", silenceLabel, "settings_silence", "toggle"))
-	
-	mb.WriteString(renderRow("Tempo:", fmt.Sprintf("%.2fx", m.tempo), "settings_tempo", "reset"))
-	mb.WriteString(renderRow("Pitch:", fmt.Sprintf("%+.1f semi", m.pitch), "settings_pitch", "reset"))
-	mb.WriteString(renderRow("EQ Preset:", eqPresets[m.eqPreset].Name, "settings_eq", "cycle"))
-	mb.WriteString(renderRow("Crossfade:", m.crossfadeSecLabel(), "settings_crossfade", "toggle"))
-	
-	repeatLabels := []string{"Off", "All", "One"}
-	mb.WriteString(renderRow("Repeat:", repeatLabels[m.repeatMode], "settings_repeat", "cycle"))
-
-	shuffleLabel := "Off"
-	if m.shuffle { shuffleLabel = "On" }
-	mb.WriteString(renderRow("Shuffle:", shuffleLabel, "settings_shuffle", "toggle"))
-
-	mb.WriteString("\n")
-	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Use the sidebar or keyboard shortcuts (o, v, <, >, {, }, E, R, S, x, X) for fine-grained control."))
-	
 	return mb.String()
 }
 
