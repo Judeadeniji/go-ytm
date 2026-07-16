@@ -238,15 +238,6 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 	return mb.String()
 }
 
-func (m Model) generateExploreContent(mainWidth int) string {
-	var mb strings.Builder
-	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Explore")
-	mb.WriteString(header)
-	mb.WriteString("\n\n")
-	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Moods, charts, and explore hubs land in a later pass."))
-	_ = mainWidth
-	return mb.String()
-}
 
 func (m Model) generateSearchResultsContent(mainWidth int) string {
 	var mb strings.Builder

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // settingsTabs defines the ordered list of tab IDs and their display names.
@@ -25,20 +25,20 @@ var settingsTabs = []struct {
 type settingsItemKind int
 
 const (
-	kindToggle  settingsItemKind = iota // enter/space flips on/off
-	kindCycle                           // enter/space advances; left/right also work
-	kindValue                           // left/right or −/+ adjust; enter resets
-	kindAction                          // enter fires the action
-	kindInfo                            // non-interactive label
+	kindToggle settingsItemKind = iota // enter/space flips on/off
+	kindCycle                          // enter/space advances; left/right also work
+	kindValue                          // left/right or −/+ adjust; enter resets
+	kindAction                         // enter fires the action
+	kindInfo                           // non-interactive label
 )
 
 // settingsItem is one navigable row in the settings panel.
 type settingsItem struct {
-	Kind    settingsItemKind
-	Label   string
-	Desc    string
-	ZoneID  string // for mouse compatibility
-	TabID   string // which tab this belongs to
+	Kind   settingsItemKind
+	Label  string
+	Desc   string
+	ZoneID string // for mouse compatibility
+	TabID  string // which tab this belongs to
 }
 
 // settingsItems returns the ordered list of interactive items for the given tab.
@@ -538,15 +538,30 @@ func (m Model) settingsRowVal(it settingsItem) string {
 	case "settings_history", "settings_remember_pos":
 		return "Off" // placeholders
 	case "settings_normalize":
-		if m.normalize { return "On" }; return "Off"
+		if m.normalize {
+			return "On"
+		}
+		return "Off"
 	case "settings_silence":
-		if m.silenceSkip { return "On" }; return "Off"
+		if m.silenceSkip {
+			return "On"
+		}
+		return "Off"
 	case "settings_shuffle":
-		if m.shuffle { return "On" }; return "Off"
+		if m.shuffle {
+			return "On"
+		}
+		return "Off"
 	case "settings_crossfade":
-		if m.crossfade { return "On" }; return "Off"
+		if m.crossfade {
+			return "On"
+		}
+		return "Off"
 	case "settings_toggle_queue":
-		if !m.queuePanelHidden { return "On" }; return "Off"
+		if !m.queuePanelHidden {
+			return "On"
+		}
+		return "Off"
 
 	// cycles
 	case "settings_repeat":
@@ -556,7 +571,9 @@ func (m Model) settingsRowVal(it settingsItem) string {
 	case "settings_crossfade_val":
 		return m.crossfadeSecLabel()
 	case "settings_sleep":
-		if m.sleepMinutes == 0 { return "Off" }
+		if m.sleepMinutes == 0 {
+			return "Off"
+		}
 		return fmt.Sprintf("%d min", m.sleepMinutes)
 	case "settings_dl_quality":
 		return "Best Available"

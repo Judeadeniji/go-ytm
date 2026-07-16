@@ -88,6 +88,7 @@ func (m Model) snapshot() session.Snapshot {
 		NowPlayingOpen:   m.nowPlayingOpen,
 		QueueIndex:       m.queue.CurrentIndex(),
 		ShowSearch:       len(m.searchResults) > 0,
+		ExploreSubTab:    m.exploreSubTab,
 	}
 	for _, t := range m.queue.Tracks() {
 		snap.Queue = append(snap.Queue, session.Track{
@@ -148,6 +149,9 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	}
 	if snap.ActiveMenu != "" {
 		m.activeMenu = snap.ActiveMenu
+	}
+	if snap.ExploreSubTab != "" {
+		m.exploreSubTab = snap.ExploreSubTab
 	}
 	m.queuePanelHidden = snap.QueuePanelHidden
 	m.searchFilter = snap.SearchFilter
@@ -273,6 +277,21 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 		}
 		ctx := m.startNavCtx()
 		cmds = append(cmds, doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen, ctx))
+	} else if m.activeMenu == "Explore" && m.stack.IsHome() {
+		m.navGen++
+		ctx := m.startNavCtx()
+		switch m.exploreSubTab {
+		case "moods":
+			m.moodCatsLoading = true
+			cmds = append(cmds, fetchMoodCategories(m.ytmapiClient, m.navGen, ctx))
+		case "charts":
+			m.chartsLoading = true
+			cmds = append(cmds, fetchCharts(m.ytmapiClient, m.chartsCountry, m.navGen, ctx))
+		default:
+			m.exploreSubTab = "overview"
+			m.exploreLoading = true
+			cmds = append(cmds, fetchExplore(m.ytmapiClient, m.navGen, ctx))
+		}
 	}
 	return tea.Batch(cmds...)
 }

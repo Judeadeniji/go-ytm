@@ -211,3 +211,52 @@ func (s *SongDetails) ArtistNames() string {
 	}
 	return strings.Join(names, ", ")
 }
+
+// ── Explore Types ────────────────────────────────────────────────────────────
+
+// MoodCategory represents a single mood or genre tile.
+type MoodCategory struct {
+	Title  string `json:"title"`
+	Params string `json:"params"`
+}
+
+// ChartArtist represents an artist in the charts list.
+type ChartArtist struct {
+	Title       string      `json:"title"`
+	BrowseID    string      `json:"browseId,omitempty"`
+	Subscribers string      `json:"subscribers,omitempty"`
+	Rank        string      `json:"rank,omitempty"`
+	Trend       string      `json:"trend,omitempty"`
+	Thumbnails  []Thumbnail `json:"thumbnails,omitempty"`
+}
+
+// ChartPlaylist holds a list of items for a specific chart section.
+type ChartPlaylist struct {
+	Playlist string             `json:"playlist,omitempty"`
+	Items    []HomeCarouselItem `json:"items,omitempty"`
+}
+
+// ExploreData is the full response from get_explore.
+type ExploreData struct {
+	NewReleases    []ArtistAlbum      `json:"new_releases,omitempty"`
+	TopSongs       *ChartPlaylist     `json:"top_songs,omitempty"`
+	MoodsAndGenres []MoodCategory     `json:"moods_and_genres,omitempty"`
+	TopEpisodes    []any              `json:"top_episodes,omitempty"` // skipping for now
+	Trending       *ChartPlaylist     `json:"trending,omitempty"`
+	NewVideos      []HomeCarouselItem `json:"new_videos,omitempty"`
+}
+
+type ChartsCountries struct {
+	Selected map[string]string `json:"selected,omitempty"`
+	Options  []string          `json:"options,omitempty"`
+}
+
+// ChartsData is the full response from get_charts.
+type ChartsData struct {
+	Countries ChartsCountries    `json:"countries,omitempty"`
+	Videos    []HomeCarouselItem `json:"videos,omitempty"`
+	Artists   []ChartArtist      `json:"artists,omitempty"`
+	Genres    []HomeCarouselItem `json:"genres,omitempty"`
+	Daily     []HomeCarouselItem `json:"daily,omitempty"`
+	Weekly    []HomeCarouselItem `json:"weekly,omitempty"`
+}

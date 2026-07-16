@@ -20,26 +20,30 @@ func (m Model) generateArtistContent(mainWidth int) string {
 		// Use the largest thumbnail for banner
 		art = m.cachedArtAt(a.Thumbnails[len(a.Thumbnails)-1].URL, artWidth, artHeight)
 	}
-	
+
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorText)
 	title := titleStyle.Render(a.Name)
-	
+
 	metaParts := []string{}
 	if a.Subscribers != "" {
 		sub := ytmapi.FormatCount(a.Subscribers)
-		if sub == "" { sub = a.Subscribers }
+		if sub == "" {
+			sub = a.Subscribers
+		}
 		metaParts = append(metaParts, sub+" subscribers")
 	}
 	if a.MonthlyListeners != "" {
 		ml := ytmapi.FormatCount(a.MonthlyListeners)
-		if ml == "" { ml = a.MonthlyListeners }
+		if ml == "" {
+			ml = a.MonthlyListeners
+		}
 		metaParts = append(metaParts, ml+" monthly listeners")
 	}
 	metaStyle := lipgloss.NewStyle().Foreground(colorSubtext)
 	meta := metaStyle.Render(strings.Join(metaParts, "  ·  "))
 
 	bannerText := lipgloss.JoinVertical(lipgloss.Left, title, meta)
-	
+
 	// Join art and text
 	banner := lipgloss.JoinHorizontal(lipgloss.Center, art, "   ", bannerText)
 	sb.WriteString(lipgloss.NewStyle().Width(mainWidth).Align(lipgloss.Left).Render(banner))
@@ -47,9 +51,12 @@ func (m Model) generateArtistContent(mainWidth int) string {
 
 	if a.Description != "" {
 		desc := a.Description
-		if len(desc) > 280 { desc = desc[:277] + "..." }
+		if len(desc) > 280 {
+			desc = desc[:277] + "..."
+		}
 		descStyle := lipgloss.NewStyle().Foreground(colorSubtext).Align(lipgloss.Left).Width(mainWidth)
-		sb.WriteString(descStyle.Render(desc) + "\n\n")
+		sb.WriteString(descStyle.Render(desc))
+		sb.WriteString("\n\n")
 	}
 
 	// Helper to extract thumbnail URL from item
@@ -66,9 +73,10 @@ func (m Model) generateArtistContent(mainWidth int) string {
 
 	// 2. Top Songs (2-col full grid with images)
 	if a.Songs != nil && len(a.Songs.Results) > 0 {
-		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Top Songs") + "\n\n")
+		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Top Songs"))
+		sb.WriteString("\n\n")
 		colWidth := (mainWidth - 4) / 2
-		
+
 		var rows []string
 		for i := 0; i < len(a.Songs.Results); i += 2 {
 			var cols []string
@@ -83,17 +91,27 @@ func (m Model) generateArtistContent(mainWidth int) string {
 				}
 				sub := artistRefName(item["album"])
 				if v := ytmapi.FormatCount(mapStr(item, "views")); v != "" {
-					if sub != "" { sub = sub + " · " + v } else { sub = v }
+					if sub != "" {
+						sub = sub + " · " + v
+					} else {
+						sub = v
+					}
 				}
-				if sub == "" { sub = "Song" }
+				if sub == "" {
+					sub = "Song"
+				}
 
 				// Truncate to fit column minus image width (approx 8 chars for art + padding)
 				textWidth := colWidth - 12
 				if textWidth < 10 {
 					textWidth = 10
 				}
-				if len(rowTitle) > textWidth { rowTitle = rowTitle[:textWidth-3] + "..." }
-				if len(sub) > textWidth { sub = sub[:textWidth-3] + "..." }
+				if len(rowTitle) > textWidth {
+					rowTitle = rowTitle[:textWidth-3] + "..."
+				}
+				if len(sub) > textWidth {
+					sub = sub[:textWidth-3] + "..."
+				}
 
 				zoneID := artistItemZone("song", item)
 				focused := m.focusedArtistZone(zoneID)
@@ -113,7 +131,7 @@ func (m Model) generateArtistContent(mainWidth int) string {
 					lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(textWidth).Render(rowTitle),
 					lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(textWidth).Render(sub),
 				)
-				
+
 				cell := lipgloss.JoinHorizontal(lipgloss.Top, songArt, "  ", textCol)
 				cell = lipgloss.NewStyle().Background(bg).Width(colWidth).Render(cell)
 				if zoneID != "" {
@@ -127,34 +145,46 @@ func (m Model) generateArtistContent(mainWidth int) string {
 				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cols[0], "    ", cols[1]))
 			}
 		}
-		sb.WriteString(strings.Join(rows, "\n\n") + "\n\n")
+		sb.WriteString(strings.Join(rows, "\n\n"))
+		sb.WriteString("\n\n")
 	}
 
 	// 3. Carousels for Albums, Singles, Fans Also Like
 	renderArtistCarousel := func(title string, items []map[string]any, kind string) {
-		if len(items) == 0 { return }
+		if len(items) == 0 {
+			return
+		}
 		contentWidth := mainWidth - 2
 		cardWidth := 28
 
 		titleStr := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
-		
+
 		btnStyle := lipgloss.NewStyle().Padding(0, 1)
 		leftBtn := m.zone.Mark(title+"_left", btnStyle.Render("<"))
 		rightBtn := m.zone.Mark(title+"_right", btnStyle.Render(">"))
 		arrows := lipgloss.JoinHorizontal(lipgloss.Top, leftBtn, " ", rightBtn)
 
 		space := contentWidth - lipgloss.Width(titleStr) - lipgloss.Width(arrows)
-		if space < 1 { space = 1 }
+		if space < 1 {
+			space = 1
+		}
 		header := lipgloss.JoinHorizontal(lipgloss.Top, titleStr, strings.Repeat(" ", space), arrows)
-		sb.WriteString(header + "\n\n")
+		sb.WriteString(header)
+		sb.WriteString("\n\n")
 
 		maxVisible := (contentWidth / cardWidth)
-		if maxVisible < 1 { maxVisible = 1 }
-		
+		if maxVisible < 1 {
+			maxVisible = 1
+		}
+
 		offset := m.carouselOffsets[title]
-		if offset < 0 { offset = 0 }
-		if offset > len(items) { offset = len(items) }
-		
+		if offset < 0 {
+			offset = 0
+		}
+		if offset > len(items) {
+			offset = len(items)
+		}
+
 		visibleItems := items[offset:]
 		if len(visibleItems) > maxVisible {
 			visibleItems = visibleItems[:maxVisible]
@@ -163,21 +193,33 @@ func (m Model) generateArtistContent(mainWidth int) string {
 		var blocks []string
 		for _, item := range visibleItems {
 			t := mapStr(item, "title")
-			if t == "" { t = mapStr(item, "artist") }
-			if len(t) > 20 { t = t[:17] + "..." }
+			if t == "" {
+				t = mapStr(item, "artist")
+			}
+			if len(t) > 20 {
+				t = t[:17] + "..."
+			}
 
 			s := ""
 			switch kind {
 			case "album":
 				s = mapStr(item, "year")
 				if typ := mapStr(item, "type"); typ != "" {
-					if s != "" { s = typ + " · " + s } else { s = typ }
+					if s != "" {
+						s = typ + " · " + s
+					} else {
+						s = typ
+					}
 				}
 			case "related":
 				s = mapStr(item, "subscribers")
-				if s == "" { s = "Artist" }
+				if s == "" {
+					s = "Artist"
+				}
 			}
-			if len(s) > 22 { s = s[:19] + "..." }
+			if len(s) > 22 {
+				s = s[:19] + "..."
+			}
 
 			art := artPlaceholder()
 			if url := getThumb(item); url != "" {
@@ -205,8 +247,9 @@ func (m Model) generateArtistContent(mainWidth int) string {
 			}
 			blocks = append(blocks, content)
 		}
-		
-		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...) + "\n\n")
+
+		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
+		sb.WriteString("\n\n")
 	}
 
 	if a.Albums != nil {

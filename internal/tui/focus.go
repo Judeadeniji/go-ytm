@@ -14,6 +14,7 @@ const (
 	screenArtist
 	screenAlbum
 	screenPlaylist
+	screenExplore
 	screenOther
 )
 
@@ -35,6 +36,9 @@ func (m Model) currentScreen() screenKind {
 	}
 	if m.activeMenu == "Home" || m.activeMenu == "" {
 		return screenHome
+	}
+	if m.activeMenu == "Explore" {
+		return screenExplore
 	}
 	return screenOther
 }
@@ -178,10 +182,24 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 			return m, false
 		}
 		m.activeCarousel = clampIndex(m.activeCarousel+delta, len(m.homeCarousels))
-		// Reset card focus into the new row.
 		m.homeCardCursor = m.carouselOffsets[m.homeCarousels[m.activeCarousel].Title]
+		m.ensureHomeCardVisible()
 		m.setMainContent()
 		return m, true
+
+	case screenExplore:
+		if m.exploreSubTab == "overview" {
+			cars := m.exploreOverviewCarousels()
+			if len(cars) == 0 {
+				return m, false
+			}
+			m.activeCarousel = clampIndex(m.activeCarousel+delta, len(cars))
+			m.homeCardCursor = m.carouselOffsets[cars[m.activeCarousel].Title]
+			m.ensureHomeCardVisible()
+			m.setMainContent()
+			return m, true
+		}
+		return m, false
 	}
 
 	return m, false
@@ -215,27 +233,49 @@ func (m Model) moveArtistCarousel(delta int) (Model, bool) {
 	return m, true
 }
 
-// moveHomeCard shifts focus within the active home carousel (horizontal).
-func (m Model) moveHomeCard(delta int) (Model, tea.Cmd) {
+// moveHomeCard shifts focus within the active home or explore carousel (horizontal).
+func (m *Model) moveHomeCard(delta int) (tea.Model, tea.Cmd) {
+	if m.currentScreen() == screenExplore && m.exploreSubTab == "overview" {
+		cars := m.exploreOverviewCarousels()
+		if len(cars) == 0 {
+			return *m, nil
+		}
+		car := cars[m.activeCarousel]
+		if len(car.Contents) == 0 {
+			return *m, nil
+		}
+		m.homeCardCursor = clampIndex(m.homeCardCursor+delta, len(car.Contents))
+		m.ensureHomeCardVisible()
+		m.setMainContent()
+		return *m, m.enqueueVisibleImages(m.mainWidth())
+	}
+
 	if !m.onHomeScreen() || len(m.homeCarousels) == 0 {
-		return m, nil
+		return *m, nil
 	}
 	car := m.homeCarousels[m.activeCarousel]
 	if len(car.Contents) == 0 {
-		return m, nil
+		return *m, nil
 	}
 	m.homeCardCursor = clampIndex(m.homeCardCursor+delta, len(car.Contents))
 	m.ensureHomeCardVisible()
 	m.setMainContent()
-	return m, m.enqueueVisibleImages(m.mainWidth())
+	return *m, m.enqueueVisibleImages(m.mainWidth())
 }
 
 func (m *Model) ensureHomeCardVisible() {
-	if len(m.homeCarousels) == 0 {
+	var title string
+	if m.onHomeScreen() && len(m.homeCarousels) > 0 {
+		title = m.homeCarousels[m.activeCarousel].Title
+	} else if m.currentScreen() == screenExplore && m.exploreSubTab == "overview" {
+		cars := m.exploreOverviewCarousels()
+		if len(cars) > 0 {
+			title = cars[m.activeCarousel].Title
+		}
+	}
+	if title == "" {
 		return
 	}
-	car := m.homeCarousels[m.activeCarousel]
-	title := car.Title
 	contentWidth := m.mainWidth() - 2
 	cardWidth := 28
 	maxVisible := contentWidth / cardWidth
@@ -415,10 +455,15 @@ func (m Model) focusedArtistZone(zid string) bool {
 	return artistItemZone(it.Kind, it.Item) == zid
 }
 
-// focusedHomeCard reports keyboard focus on a home card.
+// focusedHomeCard reports keyboard focus on a home or explore overview card.
 func (m Model) focusedHomeCard(carouselIndex, cardIndex int) bool {
-	return m.activePane == PaneMain && m.onHomeScreen() &&
-		m.activeCarousel == carouselIndex && m.homeCardCursor == cardIndex
+	if m.activePane != PaneMain {
+		return false
+	}
+	if m.currentScreen() == screenHome || (m.currentScreen() == screenExplore && m.exploreSubTab == "overview") {
+		return m.activeCarousel == carouselIndex && m.homeCardCursor == cardIndex
+	}
+	return false
 }
 
 // focusedMenuItem reports sidebar keyboard focus.

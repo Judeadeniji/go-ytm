@@ -222,6 +222,49 @@ func (c *Client) GetWatchPlaylist(ctx context.Context, videoID, playlistID strin
 	return &data, nil
 }
 
+func (c *Client) GetExplore(ctx context.Context) (*ExploreData, error) {
+	var data ExploreData
+	if err := c.getJSON(ctx, "/explore", &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+func (c *Client) GetMoodCategories(ctx context.Context) (map[string][]MoodCategory, error) {
+	var data struct {
+		MoodCategories map[string][]MoodCategory `json:"moodCategories"`
+	}
+	if err := c.getJSON(ctx, "/explore/moods", &data); err != nil {
+		return nil, err
+	}
+	return data.MoodCategories, nil
+}
+
+func (c *Client) GetMoodPlaylists(ctx context.Context, params string) ([]map[string]any, error) {
+	q := url.Values{}
+	q.Set("params", params)
+	var data struct {
+		Playlists []map[string]any `json:"playlists"`
+	}
+	if err := c.getJSON(ctx, "/explore/moods/playlists?"+q.Encode(), &data); err != nil {
+		return nil, err
+	}
+	return data.Playlists, nil
+}
+
+func (c *Client) GetCharts(ctx context.Context, country string) (*ChartsData, error) {
+	q := url.Values{}
+	if country != "" {
+		q.Set("country", country)
+	}
+	var data ChartsData
+	if err := c.getJSON(ctx, "/explore/charts?"+q.Encode(), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+
 // ArtistName returns a display string from artists slice or flat artist field.
 func (t TrackItem) ArtistName() string {
 	if len(t.Artists) > 0 {

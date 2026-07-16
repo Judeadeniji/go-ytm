@@ -146,6 +146,20 @@ type Model struct {
 	navCancel context.CancelFunc
 	navCtx    context.Context
 
+	// Explore state
+	exploreData       *ytmapi.ExploreData
+	exploreLoading    bool
+	exploreErr        string
+	moodCategories    map[string][]ytmapi.MoodCategory
+	moodCatsLoading   bool
+	activeMoodSection string
+	activeMoodParams  string
+	moodPlaylists     []map[string]any
+	chartsData        *ytmapi.ChartsData
+	chartsLoading     bool
+	chartsCountry     string
+	exploreSubTab     string // "overview" | "moods" | "charts"
+
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
 }
@@ -389,6 +403,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setQueuePanelContent()
 			}
 			return m, nil
+		case "shift+tab":
+			if m.nowPlayingOpen {
+				if m.activePane == PaneMain && m.showQueuePanel() {
+					m.activePane = PaneQueue
+					m.queueCursor = m.queue.CurrentIndex()
+					if m.queueCursor < 0 {
+						m.queueCursor = 0
+					}
+					m.setQueuePanelContent()
+				} else {
+					m.activePane = PaneMain
+				}
+				return m, nil
+			}
+			m.activePane = m.prevPane()
+			if m.activePane == PaneSidebar {
+				m.listCursor = 0
+				for i, item := range m.menuItems {
+					if item == m.activeMenu {
+						m.listCursor = i
+						break
+					}
+				}
+				m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+			}
+			if m.activePane == PaneQueue {
+				m.queueCursor = m.queue.CurrentIndex()
+				if m.queueCursor < 0 {
+					m.queueCursor = 0
+				}
+				m.setQueuePanelContent()
+			}
+			return m, nil
 		case "\\":
 			m.queuePanelHidden = !m.queuePanelHidden
 			m.markSessionDirty()
@@ -548,7 +595,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.activePane == PaneMain {
-				if m.onHomeScreen() {
+				if m.onHomeScreen() || (m.currentScreen() == screenExplore && m.exploreSubTab == "overview") {
 					return m.moveHomeCard(1)
 				}
 				if m.currentScreen() == screenArtist {
@@ -571,7 +618,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.activePane == PaneMain {
-				if m.onHomeScreen() {
+				if m.onHomeScreen() || (m.currentScreen() == screenExplore && m.exploreSubTab == "overview") {
 					return m.moveHomeCard(-1)
 				}
 				if m.currentScreen() == screenArtist {
@@ -1236,6 +1283,66 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.homeCarousels = msg.Carousels
 		m.setMainContent()
 		return m, m.enqueueVisibleImages(m.mainWidth())
+	case ExploreMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.exploreLoading = false
+		if msg.Err != nil {
+			m.exploreErr = fmtErr(msg.Err)
+			m.statusMsg = "Explore unavailable"
+			m.setMainContent()
+			return m, nil
+		}
+		m.exploreData = msg.Data
+		m.exploreErr = ""
+		m.setMainContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case MoodCategoriesMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.moodCatsLoading = false
+		if msg.Err != nil {
+			m.exploreErr = fmtErr(msg.Err)
+			m.statusMsg = "Moods unavailable"
+			m.setMainContent()
+			return m, nil
+		}
+		m.moodCategories = msg.Categories
+		m.exploreErr = ""
+		m.setMainContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case MoodPlaylistsMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.exploreLoading = false
+		if msg.Err != nil {
+			m.exploreErr = fmtErr(msg.Err)
+			m.statusMsg = "Mood playlists unavailable"
+			m.setMainContent()
+			return m, nil
+		}
+		m.moodPlaylists = msg.Playlists
+		m.exploreErr = ""
+		m.setMainContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case ChartsMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.chartsLoading = false
+		if msg.Err != nil {
+			m.exploreErr = fmtErr(msg.Err)
+			m.statusMsg = "Charts unavailable"
+			m.setMainContent()
+			return m, nil
+		}
+		m.chartsData = msg.Data
+		m.exploreErr = ""
+		m.setMainContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case ImageLoadedMsg:
 		if msg.Kitty == nil {
 			msg.Kitty = &KittyImage{Spacer: sizedPlaceholder(msg.Width, msg.Height)}
@@ -1369,6 +1476,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return mm, cmd
 			}
 
+			if m.activeMenu == "Explore" && !m.nowPlayingOpen {
+				tabs := []string{"overview", "moods", "charts"}
+				for _, tab := range tabs {
+					if m.zone.Get("explore_tab_" + tab).InBounds(mouseMsg) {
+						if m.exploreSubTab == tab {
+							continue
+						}
+						m.exploreSubTab = tab
+						m.activeMoodParams = "" // Reset mood playlists view when changing tabs
+						m.setMainContent()
+						var cmd tea.Cmd
+						if tab == "overview" && m.exploreData == nil {
+							m.exploreLoading = true
+							cmd = fetchExplore(m.ytmapiClient, m.navGen, m.navCtx)
+						} else if tab == "moods" && m.moodCategories == nil {
+							m.moodCatsLoading = true
+							cmd = fetchMoodCategories(m.ytmapiClient, m.navGen, m.navCtx)
+						} else if tab == "charts" && m.chartsData == nil {
+							m.chartsLoading = true
+							cmd = fetchCharts(m.ytmapiClient, "", m.navGen, m.navCtx)
+						}
+						return m, cmd
+					}
+				}
+				if m.exploreSubTab == "moods" {
+					if m.zone.Get("mood_back").InBounds(mouseMsg) {
+						m.activeMoodParams = ""
+						m.setMainContent()
+						return m, nil
+					}
+					if m.moodCategories != nil && m.activeMoodParams == "" {
+						for _, categories := range m.moodCategories {
+							for _, cat := range categories {
+								if m.zone.Get("mood_" + cat.Params).InBounds(mouseMsg) {
+									m.activeMoodParams = cat.Params
+									m.exploreLoading = true
+									m.setMainContent()
+									return m, fetchMoodPlaylists(m.ytmapiClient, cat.Params, m.navGen, m.navCtx)
+								}
+							}
+						}
+					}
+				}
+			}
+
 			if m.activeMenu == "Settings" && !m.nowPlayingOpen {
 				// ── Tab switching ───────────────────────────────────────────
 				for _, tab := range settingsTabs {
@@ -1470,6 +1622,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 						return m, m.enqueueVisibleImages(m.mainWidth())
 					}
+					if item == "Explore" {
+						mm, cmd := m.openExplore()
+						mm.leftViewport.SetContent(mm.generateSidebarContent(leftSidebarWidth))
+						return mm, tea.Batch(cmd, mm.enqueueVisibleImages(mm.mainWidth()))
+					}
 					m.activeMenu = item
 					m = m.leaveDetailPages()
 					m.markSessionDirty()
@@ -1506,6 +1663,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.setMainContent()
 					return m, m.enqueueVisibleImages(m.mainWidth())
+				}
+			}
+
+			if m.activeMenu == "Explore" {
+				checkExploreCarousel := func(title string, maxLen int) bool {
+					if m.zone.Get(title + "_left").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] > 0 { m.carouselOffsets[title]-- }
+						m.setMainContent()
+						return true
+					}
+					if m.zone.Get(title + "_right").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] < maxLen-1 { m.carouselOffsets[title]++ }
+						m.setMainContent()
+						return true
+					}
+					return false
+				}
+				
+				if m.exploreSubTab == "overview" && m.exploreData != nil {
+					if len(m.exploreData.NewReleases) > 0 && checkExploreCarousel("New Releases", len(m.exploreData.NewReleases)) {
+						return m, m.enqueueVisibleImages(m.mainWidth())
+					}
+					if m.exploreData.Trending != nil && len(m.exploreData.Trending.Items) > 0 && checkExploreCarousel("Trending", len(m.exploreData.Trending.Items)) {
+						return m, m.enqueueVisibleImages(m.mainWidth())
+					}
+					if len(m.exploreData.NewVideos) > 0 && checkExploreCarousel("New Music Videos", len(m.exploreData.NewVideos)) {
+						return m, m.enqueueVisibleImages(m.mainWidth())
+					}
+				} else if m.exploreSubTab == "moodPlaylists" && m.moodPlaylists != nil {
+					for _, section := range m.moodPlaylists {
+						title, _ := section["title"].(string)
+						contents, _ := section["contents"].([]any)
+						if title != "" && len(contents) > 0 {
+							if checkExploreCarousel(title, len(contents)) {
+								return m, m.enqueueVisibleImages(m.mainWidth())
+							}
+						}
+					}
 				}
 			}
 
@@ -1673,6 +1868,22 @@ func (m Model) nextPane() Pane {
 	}
 }
 
+func (m Model) prevPane() Pane {
+	switch m.activePane {
+	case PaneSidebar:
+		if m.showQueuePanel() {
+			return PaneQueue
+		}
+		return PaneMain
+	case PaneMain:
+		return PaneSidebar
+	case PaneQueue:
+		return PaneMain
+	default:
+		return PaneMain
+	}
+}
+
 // enqueueVisibleImages fetches thumbs for the active view (home cards, search,
 // playlist/album cover + track thumbs), keyed by size so layout stays stable.
 func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
@@ -1777,6 +1988,91 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			if res.Category == "Top result" || n == 0 {
 				queue(res.Thumbnails[0].URL, artWidth, artHeight)
 				n++
+			}
+		}
+	} else if m.activeMenu == "Explore" {
+		contentWidth := mainWidth - 2
+		cardWidth := 28
+		maxVisible := contentWidth / cardWidth
+		if maxVisible < 1 { maxVisible = 1 }
+		maxVisible++
+
+		if m.exploreSubTab == "overview" && m.exploreData != nil {
+			var carousels [][]ytmapi.HomeCarouselItem
+			
+			if len(m.exploreData.NewReleases) > 0 {
+				items := make([]ytmapi.HomeCarouselItem, len(m.exploreData.NewReleases))
+				for i, r := range m.exploreData.NewReleases {
+					items[i] = ytmapi.HomeCarouselItem{
+						Title: r.Title, BrowseID: r.BrowseID, PlaylistID: r.PlaylistID, Year: r.Year, Thumbnails: r.Thumbnails,
+					}
+				}
+				carousels = append(carousels, items)
+			}
+			if m.exploreData.Trending != nil && len(m.exploreData.Trending.Items) > 0 {
+				carousels = append(carousels, m.exploreData.Trending.Items)
+			}
+			if len(m.exploreData.NewVideos) > 0 {
+				carousels = append(carousels, m.exploreData.NewVideos)
+			}
+
+			// We use arbitrary titles for offsets in explore Overview in renderExploreOverview!
+			// Actually renderExploreOverview passes "New Releases", "Trending", "New Music Videos" as titles.
+			titles := []string{"New Releases", "Trending", "New Music Videos"}
+			cIdx := 0
+			for _, items := range carousels {
+				if cIdx >= len(titles) { break }
+				offset := m.carouselOffsets[titles[cIdx]]
+				if offset < 0 { offset = 0 }
+				end := offset + maxVisible
+				if end > len(items) { end = len(items) }
+				if offset <= end {
+					for _, card := range items[offset:end] {
+						if len(card.Thumbnails) > 0 {
+							queue(card.Thumbnails[0].URL, artWidth, artHeight)
+						}
+					}
+				}
+				cIdx++
+			}
+		} else if m.exploreSubTab == "moodPlaylists" && m.moodPlaylists != nil {
+			for _, section := range m.moodPlaylists {
+				title, _ := section["title"].(string)
+				contents, _ := section["contents"].([]any)
+				if len(contents) == 0 { continue }
+				
+				offset := m.carouselOffsets[title]
+				if offset < 0 { offset = 0 }
+				end := offset + maxVisible
+				if end > len(contents) { end = len(contents) }
+				if offset <= end {
+					for _, rawItem := range contents[offset:end] {
+						if item, ok := rawItem.(map[string]any); ok {
+							if thumbs, ok := item["thumbnails"].([]any); ok && len(thumbs) > 0 {
+								if thumbMap, ok := thumbs[0].(map[string]any); ok {
+									if url, ok := thumbMap["url"].(string); ok && url != "" {
+										queue(url, artWidth, artHeight)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} else if m.exploreSubTab == "charts" && m.chartsData != nil {
+			for i, artist := range m.chartsData.Artists {
+				if i >= 15 { break }
+				if len(artist.Thumbnails) > 0 {
+					queue(artist.Thumbnails[0].URL, 8, 4)
+				}
+			}
+			
+			cardW := ((mainWidth - 2) * 6 / 10 - 4) / 2
+			for i, v := range m.chartsData.Videos {
+				if i >= 6 { break }
+				if len(v.Thumbnails) > 0 {
+					queue(v.Thumbnails[0].URL, cardW-2, 6)
+				}
 			}
 		}
 	} else {

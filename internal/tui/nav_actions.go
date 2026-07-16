@@ -186,6 +186,19 @@ func (m Model) goHome() Model {
 	return m
 }
 
+func (m Model) openExplore() (Model, tea.Cmd) {
+	m = m.leaveDetailPages()
+	m.activeMenu = "Explore"
+	m.exploreSubTab = "overview"
+	m.markSessionDirty()
+	m.exploreLoading = true
+	m.exploreErr = ""
+	m.setMainContent()
+	m.mainViewport.YOffset = 0
+	ctx := m.startNavCtx()
+	return m, fetchExplore(m.ytmapiClient, m.navGen, ctx)
+}
+
 // leaveDetailPages invalidates in-flight page/search fetches and clears detail state.
 func (m Model) leaveDetailPages() Model {
 	m.cancelNavFetch()
@@ -266,7 +279,7 @@ func (m Model) popNav() (Model, tea.Cmd) {
 			m.artistPage = nil
 			m.albumPage = nil
 			m.playlistPage = nil
-			if len(m.searchResults) == 0 {
+			if len(m.searchResults) == 0 && m.activeMenu == "" {
 				m.activeMenu = "Home"
 			}
 		}
@@ -455,6 +468,24 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 						mm, cmd := m.playTracklistFrom(i)
 						return mm, cmd, true
 					}
+				}
+			}
+		}
+	}
+
+	// Explore moods
+	if m.activeMenu == "Explore" && m.exploreSubTab == "moods" {
+		for _, categories := range m.moodCategories {
+			for _, cat := range categories {
+				if m.zone.Get("mood_"+cat.Params).InBounds(mouse) {
+					m.activeMoodParams = cat.Params
+					m.exploreSubTab = "moodPlaylists"
+					m.markSessionDirty()
+					m.exploreLoading = true
+					m.setMainContent()
+					m.mainViewport.YOffset = 0
+					ctx := m.startNavCtx()
+					return m, fetchMoodPlaylists(m.ytmapiClient, cat.Params, m.navGen, ctx), true
 				}
 			}
 		}

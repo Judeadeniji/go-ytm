@@ -95,10 +95,10 @@ def oauth_token(req: OAuthTokenRequest):
     refresh_token_expires_in = raw_token.get("refresh_token_expires_in", raw_token.get("expires_in", 0))
     ref_token = RefreshingToken(
         credentials=cred,
-        access_token=raw_token["access_token"],
-        refresh_token=raw_token["refresh_token"],
-        scope=raw_token["scope"],
-        token_type=raw_token["token_type"],
+        access_token=raw_token.get("access_token", ""),
+        refresh_token=raw_token.get("refresh_token", ""),
+        scope=raw_token.get("scope", ""),
+        token_type=raw_token.get("token_type", ""),
         expires_in=refresh_token_expires_in,
     )
     ref_token.update(raw_token)
@@ -142,10 +142,25 @@ def library_artists(limit: int = Query(100)):
         raise _ytm_error(exc) from exc
 
 
+from typing import Literal
+
+_SearchFilterType = Literal[
+    "songs",
+    "videos",
+    "albums",
+    "artists",
+    "playlists",
+    "community_playlists",
+    "featured_playlists",
+    "profiles",
+    "podcasts",
+    "episodes",
+]
+
 @app.get("/search")
 def search(
     q: str = Query(..., description="The search query"),
-    filter: str | None = Query(
+    filter: _SearchFilterType | None = Query(
         None,
         description="songs|videos|albums|artists|playlists|community_playlists|featured_playlists|profiles|podcasts|episodes",
     ),
@@ -193,6 +208,47 @@ def home(limit: int = Query(3, ge=1, le=20)):
     except _CATCH as exc:
         raise _ytm_error(exc) from exc
     return {"carousels": results}
+
+
+@app.get("/explore")
+def explore():
+    """Get explore page data."""
+    try:
+        result = ytmusic.get_explore()
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+    return result
+
+
+@app.get("/explore/moods")
+def explore_moods():
+    """Get mood categories."""
+    try:
+        result = ytmusic.get_mood_categories()
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+    return {"moodCategories": result}
+
+
+@app.get("/explore/moods/playlists")
+def explore_mood_playlists(params: str = Query(...)):
+    """Get playlists for a mood category."""
+    try:
+        result = ytmusic.get_mood_playlists(params)
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+    return {"playlists": result}
+
+
+@app.get("/explore/charts")
+def explore_charts(country: str = Query("ZZ")):
+    """Get charts data."""
+    try:
+        result = ytmusic.get_charts(country=country)
+    except _CATCH as exc:
+        raise _ytm_error(exc) from exc
+    return result
+
 
 
 @app.get("/artist/{channel_id}")
@@ -326,9 +382,9 @@ def song(video_id: str):
     try:
         watch = ytmusic.get_watch_playlist(videoId=video_id, limit=5)
         tracks = watch.get("tracks") or []
-        tr = None
+        tr: dict | None = None
         for candidate in tracks:
-            if candidate.get("videoId") == video_id:
+            if isinstance(candidate, dict) and candidate.get("videoId") == video_id:
                 tr = candidate
                 break
         if tr:

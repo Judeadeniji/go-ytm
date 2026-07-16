@@ -168,3 +168,59 @@ func artistRefName(v any) string {
 	}
 	return ""
 }
+
+// ── Explore Routing ──────────────────────────────────────────────────────────
+
+type ExploreMsg struct {
+	Data *ytmapi.ExploreData
+	Gen  int
+	Err  error
+}
+
+func fetchExplore(api *ytmapi.Client, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		data, err := api.GetExplore(ctx)
+		return ExploreMsg{Data: data, Gen: gen, Err: err}
+	}
+}
+
+type MoodCategoriesMsg struct {
+	Categories map[string][]ytmapi.MoodCategory
+	Gen        int
+	Err        error
+}
+
+func fetchMoodCategories(api *ytmapi.Client, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		data, err := api.GetMoodCategories(ctx)
+		return MoodCategoriesMsg{Categories: data, Gen: gen, Err: err}
+	}
+}
+
+type MoodPlaylistsMsg struct {
+	Playlists []map[string]any
+	Params    string
+	Gen       int
+	Err       error
+}
+
+func fetchMoodPlaylists(api *ytmapi.Client, params string, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		data, err := api.GetMoodPlaylists(ctx, params)
+		return MoodPlaylistsMsg{Playlists: data, Params: params, Gen: gen, Err: err}
+	}
+}
+
+type ChartsMsg struct {
+	Data    *ytmapi.ChartsData
+	Country string
+	Gen     int
+	Err     error
+}
+
+func fetchCharts(api *ytmapi.Client, country string, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		data, err := api.GetCharts(ctx, country)
+		return ChartsMsg{Data: data, Country: country, Gen: gen, Err: err}
+	}
+}
