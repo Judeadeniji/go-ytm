@@ -400,7 +400,7 @@ func (m Model) renderMoodPlaylists(w int) string {
 			title := mapStr(p, "title")
 			if len(title) > 35 { title = title[:32] + "..." }
 			
-			thumb := artPlaceholder()
+			thumb := sizedPlaceholder(8, 4)
 			
 			getThumb := func(item map[string]any) string {
 				if thumbs, ok := item["thumbnails"].([]any); ok && len(thumbs) > 0 {
@@ -414,7 +414,10 @@ func (m Model) renderMoodPlaylists(w int) string {
 			}
 
 			if url := getThumb(p); url != "" {
-				thumb = m.cachedArtAt(url, 8, 4)
+				key := imageCacheKey(url, 8, 4)
+				if kitty, ok := m.imageCache[key]; ok && kitty != nil && kitty.Spacer != "" {
+					thumb = kitty.Spacer
+				}
 			}
 			
 			textWidth := colWidth - 12
