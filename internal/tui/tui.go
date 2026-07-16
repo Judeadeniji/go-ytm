@@ -1691,16 +1691,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(m.exploreData.NewVideos) > 0 && checkExploreCarousel("New Music Videos", len(m.exploreData.NewVideos)) {
 						return m, m.enqueueVisibleImages(m.mainWidth())
 					}
-				} else if m.exploreSubTab == "moodPlaylists" && m.moodPlaylists != nil {
-					for _, section := range m.moodPlaylists {
-						title, _ := section["title"].(string)
-						contents, _ := section["contents"].([]any)
-						if title != "" && len(contents) > 0 {
-							if checkExploreCarousel(title, len(contents)) {
-								return m, m.enqueueVisibleImages(m.mainWidth())
-							}
-						}
-					}
 				}
 			}
 
@@ -2036,25 +2026,14 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 				cIdx++
 			}
 		} else if m.exploreSubTab == "moodPlaylists" && m.moodPlaylists != nil {
-			for _, section := range m.moodPlaylists {
-				title, _ := section["title"].(string)
-				contents, _ := section["contents"].([]any)
-				if len(contents) == 0 { continue }
-				
-				offset := m.carouselOffsets[title]
-				if offset < 0 { offset = 0 }
-				end := offset + maxVisible
-				if end > len(contents) { end = len(contents) }
-				if offset <= end {
-					for _, rawItem := range contents[offset:end] {
-						if item, ok := rawItem.(map[string]any); ok {
-							if thumbs, ok := item["thumbnails"].([]any); ok && len(thumbs) > 0 {
-								if thumbMap, ok := thumbs[0].(map[string]any); ok {
-									if url, ok := thumbMap["url"].(string); ok && url != "" {
-										queue(url, artWidth, artHeight)
-									}
-								}
-							}
+			for i, p := range m.moodPlaylists {
+				if i >= 30 {
+					break // max visible playlists in grid
+				}
+				if thumbs, ok := p["thumbnails"].([]any); ok && len(thumbs) > 0 {
+					if thumbMap, ok := thumbs[0].(map[string]any); ok {
+						if url, ok := thumbMap["url"].(string); ok && url != "" {
+							queue(url, 8, 4)
 						}
 					}
 				}

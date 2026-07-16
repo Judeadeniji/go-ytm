@@ -474,18 +474,45 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 	}
 
 	// Explore moods
-	if m.activeMenu == "Explore" && m.exploreSubTab == "moods" {
-		for _, categories := range m.moodCategories {
-			for _, cat := range categories {
-				if m.zone.Get("mood_"+cat.Params).InBounds(mouse) {
-					m.activeMoodParams = cat.Params
-					m.exploreSubTab = "moodPlaylists"
-					m.markSessionDirty()
-					m.exploreLoading = true
-					m.setMainContent()
-					m.mainViewport.YOffset = 0
-					ctx := m.startNavCtx()
-					return m, fetchMoodPlaylists(m.ytmapiClient, cat.Params, m.navGen, ctx), true
+	if m.activeMenu == "Explore" {
+		if m.exploreSubTab == "moods" {
+			for _, categories := range m.moodCategories {
+				for _, cat := range categories {
+					if m.zone.Get("mood_"+cat.Params).InBounds(mouse) {
+						m.activeMoodParams = cat.Params
+						m.exploreSubTab = "moodPlaylists"
+						m.markSessionDirty()
+						m.exploreLoading = true
+						m.setMainContent()
+						m.mainViewport.YOffset = 0
+						ctx := m.startNavCtx()
+						return m, fetchMoodPlaylists(m.ytmapiClient, cat.Params, m.navGen, ctx), true
+					}
+				}
+			}
+		} else if m.exploreSubTab == "moodPlaylists" {
+			if m.zone.Get("mood_back").InBounds(mouse) {
+				m.exploreSubTab = "moods"
+				m.activeMoodParams = ""
+				m.setMainContent()
+				m.mainViewport.YOffset = 0
+				return m, nil, true
+			}
+			for _, p := range m.moodPlaylists {
+				if pid := mapStr(p, "playlistId"); pid != "" {
+					zid := "open_playlist_" + pid
+					if m.zone.Get(zid).InBounds(mouse) {
+						title := mapStr(p, "title")
+						thumb := ""
+						if thumbs, ok := p["thumbnails"].([]any); ok && len(thumbs) > 0 {
+							if t, ok := thumbs[0].(map[string]any); ok {
+								if url, ok := t["url"].(string); ok {
+									thumb = url
+								}
+							}
+						}
+						return m.dispatchZone(zid, title, "", thumb)
+					}
 				}
 			}
 		}

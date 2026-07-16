@@ -386,38 +386,55 @@ func (m Model) renderMoodPlaylists(w int) string {
 	}
 
 	var mb strings.Builder
-	
-	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("← Back to Moods & Genres (click Moods tab or shift+tab)"))
+
+	backBtn := m.zone.Mark("mood_back", lipgloss.NewStyle().Padding(0, 1).Background(colorFocusBg).Foreground(colorAccent).Render("< Back to Moods"))
+	mb.WriteString(backBtn)
 	mb.WriteString("\n\n")
 
-	items := make([]ytmapi.HomeCarouselItem, 0, len(m.moodPlaylists))
-	for _, rawItem := range m.moodPlaylists {
-		ci := ytmapi.HomeCarouselItem{}
-		if t, ok := rawItem["title"].(string); ok { ci.Title = t }
-		if v, ok := rawItem["videoId"].(string); ok { ci.VideoID = v }
-		if b, ok := rawItem["browseId"].(string); ok { ci.BrowseID = b }
-		if p, ok := rawItem["playlistId"].(string); ok { ci.PlaylistID = p }
-		
-		if thumbs, ok := rawItem["thumbnails"].([]any); ok {
-			for _, th := range thumbs {
-				if thumbMap, ok := th.(map[string]any); ok {
-					url, _ := thumbMap["url"].(string)
-					if url != "" {
-						ci.Thumbnails = append(ci.Thumbnails, ytmapi.Thumbnail{URL: url})
+	colWidth := (w - 4) / 2
+	var rows []string
+	for i := 0; i < len(m.moodPlaylists); i += 2 {
+		var cols []string
+		for j := 0; j < 2 && i+j < len(m.moodPlaylists); j++ {
+			p := m.moodPlaylists[i+j]
+			title := mapStr(p, "title")
+			if len(title) > 35 { title = title[:32] + "..." }
+			
+			thumb := artPlaceholder()
+			
+			getThumb := func(item map[string]any) string {
+				if thumbs, ok := item["thumbnails"].([]any); ok && len(thumbs) > 0 {
+					if t, ok := thumbs[0].(map[string]any); ok {
+						if url, ok := t["url"].(string); ok {
+							return url
+						}
 					}
 				}
+				return ""
 			}
-		}
-		items = append(items, ci)
-	}
-	
-	// Render them using renderCarouselRow as a single giant carousel, 
-	// or better, render them as a grid wrapping if we have many.
-	// But `renderCarouselRow` already limits to visible width and handles arrows.
-	// Let's just use `renderCarouselRow` for simplicity and pass the whole list.
-	// We'll give it a title matching the active params for offsets.
-	title := "Mood: " + m.activeMoodParams
-	mb.WriteString(m.renderCarouselRow(0, title, items, w))
 
+			if url := getThumb(p); url != "" {
+				thumb = m.cachedArtAt(url, 8, 4)
+			}
+			
+			textWidth := colWidth - 12
+			if textWidth < 10 { textWidth = 10 }
+			
+			textCol := lipgloss.NewStyle().Bold(true).Foreground(colorText).Width(textWidth).Render(title)
+			cell := lipgloss.JoinHorizontal(lipgloss.Top, thumb, "  ", textCol)
+			cell = lipgloss.NewStyle().Width(colWidth).Render(cell)
+			
+			if pid := mapStr(p, "playlistId"); pid != "" {
+				cell = m.zone.Mark("open_playlist_"+pid, cell)
+			}
+			cols = append(cols, cell)
+		}
+		if len(cols) == 1 {
+			rows = append(rows, cols[0])
+		} else {
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cols[0], "    ", cols[1]))
+		}
+	}
+	mb.WriteString(strings.Join(rows, "\n\n"))
 	return mb.String()
 }
