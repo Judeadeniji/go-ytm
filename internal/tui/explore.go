@@ -390,46 +390,34 @@ func (m Model) renderMoodPlaylists(w int) string {
 	mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("← Back to Moods & Genres (click Moods tab or shift+tab)"))
 	mb.WriteString("\n\n")
 
-	cIdx := 0
-	for _, section := range m.moodPlaylists {
-		title, _ := section["title"].(string)
-		contents, _ := section["contents"].([]any)
-		if len(contents) == 0 {
-			continue
-		}
-
-		items := make([]ytmapi.HomeCarouselItem, 0, len(contents))
-		for _, rawItem := range contents {
-			item, ok := rawItem.(map[string]any)
-			if !ok {
-				continue
-			}
-			
-			// parse as HomeCarouselItem roughly
-			ci := ytmapi.HomeCarouselItem{}
-			if t, ok := item["title"].(string); ok { ci.Title = t }
-			if v, ok := item["videoId"].(string); ok { ci.VideoID = v }
-			if b, ok := item["browseId"].(string); ok { ci.BrowseID = b }
-			if p, ok := item["playlistId"].(string); ok { ci.PlaylistID = p }
-			
-			if thumbs, ok := item["thumbnails"].([]any); ok {
-				for _, th := range thumbs {
-					if thumbMap, ok := th.(map[string]any); ok {
-						url, _ := thumbMap["url"].(string)
-						if url != "" {
-							ci.Thumbnails = append(ci.Thumbnails, ytmapi.Thumbnail{URL: url})
-						}
+	items := make([]ytmapi.HomeCarouselItem, 0, len(m.moodPlaylists))
+	for _, rawItem := range m.moodPlaylists {
+		ci := ytmapi.HomeCarouselItem{}
+		if t, ok := rawItem["title"].(string); ok { ci.Title = t }
+		if v, ok := rawItem["videoId"].(string); ok { ci.VideoID = v }
+		if b, ok := rawItem["browseId"].(string); ok { ci.BrowseID = b }
+		if p, ok := rawItem["playlistId"].(string); ok { ci.PlaylistID = p }
+		
+		if thumbs, ok := rawItem["thumbnails"].([]any); ok {
+			for _, th := range thumbs {
+				if thumbMap, ok := th.(map[string]any); ok {
+					url, _ := thumbMap["url"].(string)
+					if url != "" {
+						ci.Thumbnails = append(ci.Thumbnails, ytmapi.Thumbnail{URL: url})
 					}
 				}
 			}
-			items = append(items, ci)
 		}
-		
-		if len(items) > 0 {
-			mb.WriteString(m.renderCarouselRow(cIdx, title, items, w))
-			cIdx++
-		}
+		items = append(items, ci)
 	}
+	
+	// Render them using renderCarouselRow as a single giant carousel, 
+	// or better, render them as a grid wrapping if we have many.
+	// But `renderCarouselRow` already limits to visible width and handles arrows.
+	// Let's just use `renderCarouselRow` for simplicity and pass the whole list.
+	// We'll give it a title matching the active params for offsets.
+	title := "Mood: " + m.activeMoodParams
+	mb.WriteString(m.renderCarouselRow(0, title, items, w))
 
 	return mb.String()
 }
