@@ -273,7 +273,7 @@ func (m Model) toggleMute() (Model, tea.Cmd) {
 func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	dur := m.effectiveDuration()
 	if m.currentTrack == nil || dur <= 0 || !m.audioLoaded {
-		if m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease) {
+		if m.scrubbing && msg.Action == tea.MouseActionRelease {
 			m.scrubbing = false
 			return m, nil, true
 		}
@@ -291,12 +291,12 @@ func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
 		return m, nil, true
 
-	case m.scrubbing && (msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion):
+	case m.scrubbing && msg.Action == tea.MouseActionMotion:
 		// Preview only — keep scrubbing even if the cursor leaves the bar.
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
 		return m, nil, true
 
-	case m.scrubbing && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease):
+	case m.scrubbing && msg.Action == tea.MouseActionRelease:
 		m.scrubPos = m.seekPosFromProgressMouse(msg, z)
 		m.playPos = m.scrubPos
 		m.scrubbing = false

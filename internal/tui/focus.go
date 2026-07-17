@@ -136,9 +136,9 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 		// Details (and future inspector tabs) scroll as a document, not a track list.
 		if m.railTab != RailQueue {
 			if delta < 0 {
-				m.rightViewport.LineUp(1)
+				m.rightViewport.ScrollUp(1)
 			} else {
-				m.rightViewport.LineDown(1)
+				m.rightViewport.ScrollDown(1)
 			}
 			return m, true
 		}

@@ -248,7 +248,7 @@ func absInt(n int) int {
 }
 
 // syncLyricsFollowOffset keeps Model.lyricsViewport content+offset current so
-// j/k LineUp/Down operate on real lines (View-only SetContent is not enough).
+// j/k ScrollUp/Down operate on real lines (View-only SetContent is not enough).
 func (m *Model) syncLyricsFollowOffset() {
 	if !m.nowPlayingOpen {
 		return
@@ -346,9 +346,9 @@ func (m *Model) moveLyricsCursor(delta int) {
 	if n == 0 {
 		// Plain lyrics: viewport scroll only.
 		if delta < 0 {
-			m.lyricsViewport.LineUp(1)
+			m.lyricsViewport.ScrollUp(1)
 		} else {
-			m.lyricsViewport.LineDown(1)
+			m.lyricsViewport.ScrollDown(1)
 		}
 		m.pauseLyricsFollow()
 		return
@@ -410,7 +410,7 @@ func (m Model) handleLyricsWheel(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	// Content is often only set during View (on a copy); hydrate the Model
-	// viewport before scrolling so LineUp/Down actually move.
+	// viewport before scrolling so ScrollUp/Down actually move.
 	m.hydrateLyricsViewport()
 	m.pauseLyricsFollow()
 	var cmd tea.Cmd
