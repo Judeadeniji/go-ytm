@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -28,7 +28,7 @@ func init() {
 func main() {
 	var logPath string
 	if os.Getenv("YTM_DEV") == "1" {
-		os.MkdirAll("tmp", 0700)
+		_ = os.MkdirAll("tmp", 0700)
 		logPath = "tmp/ytm-tui.log"
 	} else {
 		stateDir := os.ExpandEnv("$HOME/.local/state/go-ytm")
@@ -45,7 +45,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer f.Close()
-	log.Printf("Starting go-ytm TUI...")
+
+	logger := slog.New(slog.NewJSONHandler(f, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	slog.SetDefault(logger)
+
+	slog.Info("Starting go-ytm TUI...")
 	p, err := player.NewPlayer()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting MPV player: %v\n", err)

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"log/slog"
 
 	youtube "github.com/kkdai/youtube/v2"
 )
@@ -74,16 +75,27 @@ func (e *Extractor) GetStreamURL(ctx context.Context, videoID string) (string, e
 		return "", err
 	}
 
+	start := time.Now()
 	url, primaryErr := e.getStreamURLYoutubeClient(ctx, videoID)
+	duration := time.Since(start)
+	
 	if primaryErr == nil && url != "" {
+		slog.Debug("stream extraction success", "video_id", videoID, "duration", duration, "method", "youtubeClient")
 		return url, nil
 	}
+	
+	slog.Warn("primary stream extraction failed, trying fallback", "video_id", videoID, "err", primaryErr, "duration", duration)
+
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
 
+	startFb := time.Now()
 	url, fallbackErr := e.getStreamURLYtDlp(ctx, videoID)
+	fbDuration := time.Since(startFb)
+	
 	if fallbackErr == nil && url != "" {
+		slog.Debug("stream extraction fallback success", "video_id", videoID, "duration", fbDuration, "method", "yt-dlp")
 		return url, nil
 	}
 
@@ -93,6 +105,8 @@ func (e *Extractor) GetStreamURL(ctx context.Context, videoID string) (string, e
 	if fallbackErr == nil {
 		fallbackErr = errors.New("empty stream URL")
 	}
+
+	slog.Error("stream extraction failed completely", "video_id", videoID, "primary_err", primaryErr, "fallback_err", fallbackErr)
 
 	if isNotFound(fallbackErr) {
 		return "", fmt.Errorf("%w (yt-dlp fallback missing — install yt-dlp or add it to PATH)", primaryErr)

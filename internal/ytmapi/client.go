@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -56,11 +57,17 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	if c.token != "" {
 		req.Header.Set("X-API-Token", c.token)
 	}
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(start)
+
 	if err != nil {
+		slog.Error("ytm-api request failed", "method", "GET", "path", path, "err", err, "duration", duration)
 		return fmt.Errorf("ytm-api unreachable: %w", err)
 	}
 	defer resp.Body.Close()
+
+	slog.Debug("ytm-api request", "method", "GET", "path", path, "status", resp.StatusCode, "duration", duration)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIBody+1))
 	if err != nil {
@@ -369,11 +376,17 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 		req.Header.Set("X-API-Token", c.token)
 	}
 	
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(start)
+
 	if err != nil {
+		slog.Error("ytm-api request failed", "method", "POST", "path", path, "err", err, "duration", duration)
 		return fmt.Errorf("ytm-api unreachable: %w", err)
 	}
 	defer resp.Body.Close()
+
+	slog.Debug("ytm-api request", "method", "POST", "path", path, "status", resp.StatusCode, "duration", duration)
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIBody+1))
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"os"
@@ -207,7 +208,7 @@ func (p *Player) startEventLoop() {
 		}
 		if err := scanner.Err(); err != nil {
 			if !isClosedConnectionError(err) {
-				fmt.Fprintf(os.Stderr, "mpv ipc scanner error: %v\n", err)
+				slog.Error("mpv ipc scanner error", "err", err)
 			}
 		}
 	}()

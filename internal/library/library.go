@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if ver < 1 {
 		stmts := []string{
@@ -245,6 +245,29 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		for _, s := range alters {
 			if _, err := tx.Exec(s); err != nil {
 				return fmt.Errorf("migrate v6: %w", err)
+			}
+		}
+		ver = 6
+	}
+
+	if ver < 7 {
+		alters := []string{
+			`ALTER TABLE download_cache ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE download_cache ADD COLUMN artist TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE download_cache ADD COLUMN album TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE download_cache ADD COLUMN duration TEXT NOT NULL DEFAULT ''`,
+			`CREATE TABLE IF NOT EXISTS lyrics_cache (
+				video_id TEXT PRIMARY KEY,
+				instrumental INTEGER NOT NULL DEFAULT 0,
+				plain_lyrics TEXT NOT NULL DEFAULT '',
+				synced_lyrics TEXT NOT NULL DEFAULT '',
+				cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+			)`,
+			`INSERT INTO schema_migrations(version) VALUES (7)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v7: %w", err)
 			}
 		}
 	}
@@ -396,7 +419,7 @@ func (db *DB) SaveSession(snap session.Snapshot) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	hidden, showSearch, muted, wasPlaying, nowPlaying, normalize, crossfade := 0, 0, 0, 0, 0, 0, 0
 	if snap.QueuePanelHidden {
