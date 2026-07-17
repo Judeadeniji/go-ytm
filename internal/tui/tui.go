@@ -24,6 +24,11 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 )
 
+var (
+	// Throttle mouse wheel to prevent bubbletea/terminal lag with heavy ANSI renders
+	lastWheelTime time.Time
+)
+
 type Model struct {
 	width  int
 	height int
@@ -142,6 +147,14 @@ type Model struct {
 	listCursor     int // search / artist / sidebar / suggestions
 	homeCardCursor int // card index within active home carousel
 	queueCursor    int // focus in queue panel (separate from playing index)
+	
+	libraryTab      string // "playlists", "songs", "albums", "artists", "downloads"
+	libPlaylists    []map[string]any
+	libSongs        []map[string]any
+	libAlbums       []map[string]any
+	libArtists      []map[string]any
+	libDownloads    []library.CachedTrack
+	
 	railTab        RailTab
 
 	sessionStore      *library.DB
@@ -209,6 +222,11 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		activeCarousel: 0,
 		menuItems:      []string{"Home", "Explore", "Library", "Settings"},
 		activeMenu:     "Home",
+		libraryTab:     "playlists",
+		libPlaylists:   []map[string]any{},
+		libSongs:       []map[string]any{},
+		libAlbums:      []map[string]any{},
+		libArtists:     []map[string]any{},
 		playlists: [][2]string{
 			{"Liked Music", "📌 Auto playlist"},
 			{"TikTok Songs", "Oluwaferanmi A.J"},
@@ -687,7 +705,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
 				m.hydrateLyricsViewport()
 				m.pauseLyricsFollow()
-				m.lyricsViewport.ViewUp()
+				m.lyricsViewport.PageUp()
 				if len(m.lyricsLines) > 0 {
 					m.lyricsCursor = clampIndex(m.lyricsViewport.YOffset, len(m.lyricsLines))
 				}
@@ -696,18 +714,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch m.activePane {
 			case PaneSidebar:
-				m.leftViewport.ViewUp()
+				m.leftViewport.PageUp()
 			case PaneQueue:
-				m.rightViewport.ViewUp()
+				m.rightViewport.PageUp()
 			default:
-				m.mainViewport.ViewUp()
+				m.mainViewport.PageUp()
 			}
 			return m, nil
 		case "pgdown", "ctrl+d":
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
 				m.hydrateLyricsViewport()
 				m.pauseLyricsFollow()
-				m.lyricsViewport.ViewDown()
+				m.lyricsViewport.PageDown()
 				if len(m.lyricsLines) > 0 {
 					m.lyricsCursor = clampIndex(m.lyricsViewport.YOffset+m.lyricsViewport.Height-1, len(m.lyricsLines))
 				}
@@ -716,11 +734,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch m.activePane {
 			case PaneSidebar:
-				m.leftViewport.ViewDown()
+				m.leftViewport.PageDown()
 			case PaneQueue:
-				m.rightViewport.ViewDown()
+				m.rightViewport.PageDown()
 			default:
-				m.mainViewport.ViewDown()
+				m.mainViewport.PageDown()
 			}
 			return m, nil
 		}
@@ -893,6 +911,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case LibraryDataMsg:
+		if msg.Err != nil {
+			m.pageErr = msg.Err.Error()
+		} else {
+			m.pageErr = ""
+			switch msg.Tab {
+			case "playlists":
+				m.libPlaylists = msg.Playlists
+			case "songs":
+				m.libSongs = msg.Songs
+			case "albums":
+				m.libAlbums = msg.Albums
+			case "artists":
+				m.libArtists = msg.Artists
+			case "downloads":
+				m.libDownloads = msg.Downloads
+			}
+		}
+		m.pageLoading = false
+		m.setMainContent()
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case playerErrMsg:
 		if msg.Err != nil {
 			if msg.Op == "pause" {
@@ -1547,9 +1586,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Ignore pure motion events unless we are actively scrubbing
-		isMotion := mouseMsg.Action == tea.MouseActionMotion || mouseMsg.Type == tea.MouseMotion || mouseMsg.Type == tea.MouseUnknown
+		isMotion := mouseMsg.Action == tea.MouseActionMotion
 		if isMotion && !m.scrubbing {
 			return m, nil
+		}
+
+		isWheel := mouseMsg.Button == tea.MouseButtonWheelUp || mouseMsg.Button == tea.MouseButtonWheelDown || mouseMsg.Button == tea.MouseButtonWheelLeft || mouseMsg.Button == tea.MouseButtonWheelRight
+		if isWheel {
+			if time.Since(lastWheelTime) < 40*time.Millisecond {
+				return m, nil // Unchanged model = skips View(), drains queue instantly
+			}
+			lastWheelTime = time.Now()
 		}
 
 		if m.searchInput.Focused() && mouseMsg.Button == tea.MouseButtonLeft && mouseMsg.Action == tea.MouseActionPress {
@@ -1889,6 +1936,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rightViewport, cmd = m.rightViewport.Update(msg)
 		default:
 			m.mainViewport, cmd = m.mainViewport.Update(msg)
+			if isWheel {
+				cmd = tea.Batch(cmd, m.enqueueVisibleImages(m.mainWidth()))
+			}
 		}
 	}
 
@@ -2390,9 +2440,9 @@ type authErrorMsg struct {
 func (m *Model) openEditorForHeadersCmd() tea.Cmd {
 	return func() tea.Msg {
 		filePath := os.ExpandEnv("$HOME/.local/state/go-ytm/headers.txt")
-		os.MkdirAll(filepath.Dir(filePath), 0700)
+		_ = os.MkdirAll(filepath.Dir(filePath), 0700)
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			os.WriteFile(filePath, []byte("# Paste your request headers from music.youtube.com here\n# (e.g. from Firefox Network tab -> right click a request -> Copy -> Copy Request Headers)\n# Save and exit to continue.\n\n"), 0600)
+			_ = os.WriteFile(filePath, []byte("# Paste your request headers from music.youtube.com here\n# (e.g. from Firefox Network tab -> right click a request -> Copy -> Copy Request Headers)\n# Save and exit to continue.\n\n"), 0600)
 		}
 
 		editor := os.Getenv("EDITOR")

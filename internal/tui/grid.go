@@ -15,7 +15,10 @@ func (m Model) generateMainContent(mainWidth int) string {
 		return lipgloss.NewStyle().Foreground(colorSubtext).Padding(2).Render("Loading…")
 	}
 	if m.pageErr != "" {
-		return lipgloss.NewStyle().Foreground(colorRed).Padding(2).Render("Error: " + m.pageErr)
+		errText := lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.pageErr)
+		retryBtn := lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorText).Padding(0, 2).Render("Retry")
+		retryBtn = m.zone.Mark("retry_page", retryBtn)
+		return lipgloss.NewStyle().Padding(2).Render(errText + "\n\n" + retryBtn)
 	}
 
 	if sc, ok := m.stack.Current(); ok {

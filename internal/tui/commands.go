@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/judeadeniji/go-ytm/internal/library"
 	"github.com/judeadeniji/go-ytm/internal/lyrics"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
@@ -30,8 +31,6 @@ type streamReadyMsg struct {
 	Err    error
 	Cached bool // served from preload cache
 }
-
-
 
 // playTrack resolves a stream URL for t. Pair with stopPlayback via tea.Sequence
 // (not Batch) so Stop cannot race a subsequent Load.
@@ -275,8 +274,6 @@ type SearchResultsMsg struct {
 	Err     error
 }
 
-
-
 type SearchSuggestionsMsg struct {
 	Suggestions []ytmapi.SearchSuggestionItem
 	Results     []ytmapi.SearchResult
@@ -388,13 +385,52 @@ func hashString(s string) int {
 	return h
 }
 
-
-
 func fetchImageSized(url string, width, height int) tea.Cmd {
 	return func() tea.Msg {
 		id := hashString(imageCacheKey(url, width, height))
 		kitty := RenderRemoteImage(url, width, height, id)
 		return ImageLoadedMsg{URL: url, Width: width, Height: height, Kitty: &kitty}
+	}
+}
+
+// LibraryDataMsg returns data for a specific library tab
+type LibraryDataMsg struct {
+	Tab       string
+	Playlists []map[string]any
+	Songs     []map[string]any
+	Albums    []map[string]any
+	Artists   []map[string]any
+	Downloads []library.CachedTrack
+	Err       error
+}
+
+func fetchLibraryTab(api *ytmapi.Client, db *library.DB, tab string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var msg LibraryDataMsg
+		msg.Tab = tab
+
+		switch tab {
+		case "playlists":
+			res, err := api.GetLibraryPlaylists(ctx, 100)
+			msg.Playlists, msg.Err = res, err
+		case "songs":
+			res, err := api.GetLibrarySongs(ctx, 100)
+			msg.Songs, msg.Err = res, err
+		case "albums":
+			res, err := api.GetLibraryAlbums(ctx, 100)
+			msg.Albums, msg.Err = res, err
+		case "artists":
+			res, err := api.GetLibraryArtists(ctx, 100)
+			msg.Artists, msg.Err = res, err
+		case "downloads":
+			res, err := db.GetDownloads()
+			msg.Downloads, msg.Err = res, err
+		}
+
+		return msg
 	}
 }
 
@@ -407,5 +443,3 @@ func debounceImagesRedraw() tea.Cmd {
 		return imagesRedrawMsg{}
 	})
 }
-
-
