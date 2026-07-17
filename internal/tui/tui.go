@@ -51,9 +51,10 @@ type Model struct {
 	suggestionGen     int // bumps on each query change; ignores stale fetches
 	sugCancel         context.CancelFunc
 	zone              *zone.Manager
-	
+
 	authState         int // 0: None, 1: Connecting
 	oauthState        int // 0: None, 1: Entering Client ID/Path, 2: Entering Client Secret, 3: Waiting
+	isAuthenticated   bool
 	settingsTab       string
 	settingsRow       int // focused row index in the current settings tab
 	oauthInput        textinput.Model
@@ -197,6 +198,10 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		store = nil
 	}
 
+	authFile := os.ExpandEnv("$HOME/.local/state/go-ytm/headers_auth.json")
+	_, errAuth := os.Stat(authFile)
+	isAuthenticated := errAuth == nil
+
 	return Model{
 		activePane:     PaneMain,
 		activeCarousel: 0,
@@ -223,6 +228,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		rightViewport:     viewport.New(0, 0),
 		lyricsViewport:    viewport.New(0, 0),
 		searchInput:       ti,
+		isAuthenticated:   isAuthenticated,
 		oauthInput:        oti,
 		settingsTab:       "account",
 		zone:              zone.New(),
@@ -275,7 +281,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				val := strings.TrimSpace(m.oauthInput.Value())
-				if m.oauthState == 1 {
+				switch m.oauthState {
+				case 1:
 					if val != "" {
 						if strings.HasSuffix(val, ".json") {
 							// Simple heuristic: if it ends with .json, parse it.
@@ -294,7 +301,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.oauthInput.Placeholder = "Client Secret"
 					m.setMainContent()
 					return m, nil
-				} else if m.oauthState == 2 {
+				case 2:
 					m.oauthClientSecret = val
 					m.oauthState = 3
 					m.oauthInput.Blur()
@@ -1384,25 +1391,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case authHeadersReadyMsg:
 		m.statusMsg = "Authenticating with headers..."
 		m.setMainContent()
-		return m, func() tea.Msg {
-			err := m.ytmapiClient.AuthSetup(context.Background(), msg.headers)
-			if err != nil {
-				return authErrorMsg{err: err}
-			}
-			return authSuccessMsg{}
-		}
+		return m, tea.Batch(
+			tea.EnableMouseCellMotion,
+			func() tea.Msg {
+				err := m.ytmapiClient.AuthSetup(context.Background(), msg.headers)
+				if err != nil {
+					return authErrorMsg{err: err}
+				}
+				return authSuccessMsg{}
+			},
+		)
 
 	case authErrorMsg:
 		m.authState = 0
 		m.statusMsg = fmt.Sprintf("Auth error: %v", msg.err)
 		m.setMainContent()
-		return m, nil
+		return m, tea.EnableMouseCellMotion
 
 	case authSuccessMsg:
 		m.authState = 0
+		m.isAuthenticated = true
 		m.statusMsg = "Successfully authenticated!"
+		m.homeCarousels = nil
+		m.exploreData = nil
+		m.moodCategories = nil
+		m.moodPlaylists = nil
+		m.chartsData = nil
 		m.setMainContent()
-		return m, nil
+		return m, fetchHome(m.ytmapiClient)
 
 	case clientSecretParsedMsg:
 		if msg.err != nil {
@@ -1443,10 +1459,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Success!
 		m.oauthState = 0
+		m.isAuthenticated = true
 		m.statusMsg = "Successfully authenticated!"
 		m.oauthCodeResp = nil
+		m.homeCarousels = nil
+		m.exploreData = nil
+		m.moodCategories = nil
+		m.moodPlaylists = nil
+		m.chartsData = nil
 		m.setMainContent()
-		return m, nil
+		return m, fetchHome(m.ytmapiClient)
 
 	case imagesRedrawMsg:
 		m.imageDirty = false
@@ -1491,6 +1513,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if mm, cmd, handled := m.handleLyricsWheel(mouseMsg); handled {
 			return mm, cmd
+		}
+
+		// Ignore pure motion events unless we are actively scrubbing
+		if mouseMsg.Action == tea.MouseActionMotion && !m.scrubbing {
+			return m, nil
 		}
 
 		if m.searchInput.Focused() && mouseMsg.Button == tea.MouseButtonLeft && mouseMsg.Action == tea.MouseActionPress {
@@ -1573,7 +1600,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.moodCategories != nil && m.activeMoodParams == "" {
 						for _, categories := range m.moodCategories {
 							for _, cat := range categories {
-								if m.zone.Get("mood_"+cat.Params).InBounds(mouseMsg) {
+								if m.zone.Get("mood_" + cat.Params).InBounds(mouseMsg) {
 									m.activeMoodParams = cat.Params
 									m.moodPlaylists = nil
 									m.exploreLoading = true
@@ -1619,13 +1646,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// ── Playback tab ────────────────────────────────────────────
 				if m.zone.Get("settings_repeat").InBounds(mouseMsg) {
-					mm, cmd := m.cycleRepeatMode(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.cycleRepeatMode()
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_shuffle").InBounds(mouseMsg) {
-					mm, cmd := m.toggleShuffle(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.toggleShuffle()
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_crossfade").InBounds(mouseMsg) {
-					mm, cmd := m.toggleCrossfade(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.toggleCrossfade()
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_crossfade_dec").InBounds(mouseMsg) ||
 					m.zone.Get("settings_crossfade_val_dec").InBounds(mouseMsg) {
@@ -1636,27 +1669,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.stepCrossfadeSec(1)
 				}
 				if m.zone.Get("settings_sleep").InBounds(mouseMsg) {
-					mm, cmd := m.cycleSleepTimer(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.cycleSleepTimer()
+					mm.setMainContent()
+					return mm, cmd
 				}
 
 				// ── Audio tab ───────────────────────────────────────────────
 				if m.zone.Get("settings_normalize").InBounds(mouseMsg) {
-					mm, cmd := m.toggleNormalize(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.toggleNormalize()
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_silence").InBounds(mouseMsg) {
-					mm, cmd := m.toggleSilenceSkip(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.toggleSilenceSkip()
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_tempo_dec").InBounds(mouseMsg) {
-					mm, cmd := m.adjustTempo(-0.05); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.adjustTempo(-0.05)
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_tempo_inc").InBounds(mouseMsg) {
-					mm, cmd := m.adjustTempo(0.05); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.adjustTempo(0.05)
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_pitch_dec").InBounds(mouseMsg) {
-					mm, cmd := m.adjustPitch(-1); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.adjustPitch(-1)
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_pitch_inc").InBounds(mouseMsg) {
-					mm, cmd := m.adjustPitch(1); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.adjustPitch(1)
+					mm.setMainContent()
+					return mm, cmd
 				}
 				if m.zone.Get("settings_tempo_reset").InBounds(mouseMsg) {
 					mm, c1 := m.resetTempo()
@@ -1665,7 +1712,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return mmm, tea.Batch(c1, c2)
 				}
 				if m.zone.Get("settings_eq").InBounds(mouseMsg) {
-					mm, cmd := m.cycleEQPreset(); mm.setMainContent(); return mm, cmd
+					mm, cmd := m.cycleEQPreset()
+					mm.setMainContent()
+					return mm, cmd
 				}
 
 				// ── General tab ─────────────────────────────────────────────
@@ -1739,18 +1788,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeMenu == "Explore" {
 				checkExploreCarousel := func(title string, maxLen int) bool {
 					if m.zone.Get(title + "_left").InBounds(mouseMsg) {
-						if m.carouselOffsets[title] > 0 { m.carouselOffsets[title]-- }
+						if m.carouselOffsets[title] > 0 {
+							m.carouselOffsets[title]--
+						}
 						m.setMainContent()
 						return true
 					}
 					if m.zone.Get(title + "_right").InBounds(mouseMsg) {
-						if m.carouselOffsets[title] < maxLen-1 { m.carouselOffsets[title]++ }
+						if m.carouselOffsets[title] < maxLen-1 {
+							m.carouselOffsets[title]++
+						}
 						m.setMainContent()
 						return true
 					}
 					return false
 				}
-				
+
 				if m.exploreSubTab == "overview" && m.exploreData != nil {
 					if len(m.exploreData.NewReleases) > 0 && checkExploreCarousel("New Releases", len(m.exploreData.NewReleases)) {
 						return m, m.enqueueVisibleImages(m.mainWidth())
@@ -2054,12 +2107,14 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 		contentWidth := mainWidth - 2
 		cardWidth := 28
 		maxVisible := contentWidth / cardWidth
-		if maxVisible < 1 { maxVisible = 1 }
+		if maxVisible < 1 {
+			maxVisible = 1
+		}
 		maxVisible++
 
 		if m.exploreSubTab == "overview" && m.exploreData != nil {
 			var carousels [][]ytmapi.HomeCarouselItem
-			
+
 			if len(m.exploreData.NewReleases) > 0 {
 				items := make([]ytmapi.HomeCarouselItem, len(m.exploreData.NewReleases))
 				for i, r := range m.exploreData.NewReleases {
@@ -2081,11 +2136,17 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			titles := []string{"New Releases", "Trending", "New Music Videos"}
 			cIdx := 0
 			for _, items := range carousels {
-				if cIdx >= len(titles) { break }
+				if cIdx >= len(titles) {
+					break
+				}
 				offset := m.carouselOffsets[titles[cIdx]]
-				if offset < 0 { offset = 0 }
+				if offset < 0 {
+					offset = 0
+				}
 				end := offset + maxVisible
-				if end > len(items) { end = len(items) }
+				if end > len(items) {
+					end = len(items)
+				}
 				if offset <= end {
 					for _, card := range items[offset:end] {
 						if len(card.Thumbnails) > 0 {
@@ -2111,27 +2172,35 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			}
 		} else if m.exploreSubTab == "charts" && m.chartsData != nil {
 			for i, artist := range m.chartsData.Artists {
-				if i >= 15 { break }
+				if i >= 15 {
+					break
+				}
 				if len(artist.Thumbnails) > 0 {
 					queue(artist.Thumbnails[0].URL, 8, 4)
 				}
 			}
-			
-			cardW := ((mainWidth - 2) * 6 / 10 - 4) / 2
+
+			cardW := ((mainWidth-2)*6/10 - 4) / 2
 			for i, v := range m.chartsData.Videos {
-				if i >= 6 { break }
+				if i >= 6 {
+					break
+				}
 				if len(v.Thumbnails) > 0 {
 					queue(v.Thumbnails[0].URL, cardW-2, 6)
 				}
 			}
 			for i, v := range m.chartsData.Daily {
-				if i >= 10 { break }
+				if i >= 10 {
+					break
+				}
 				if len(v.Thumbnails) > 0 {
 					queue(v.Thumbnails[0].URL, 8, 4)
 				}
 			}
 			for i, v := range m.chartsData.Weekly {
-				if i >= 10 { break }
+				if i >= 10 {
+					break
+				}
 				if len(v.Thumbnails) > 0 {
 					queue(v.Thumbnails[0].URL, 8, 4)
 				}
@@ -2343,7 +2412,7 @@ func (m *Model) parseClientSecretCmd(path string) tea.Cmd {
 		if err := json.Unmarshal(data, &parsed); err != nil {
 			return clientSecretParsedMsg{err: err}
 		}
-		
+
 		clientID := parsed.Installed.ClientID
 		clientSecret := parsed.Installed.ClientSecret
 		if clientID == "" {

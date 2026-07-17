@@ -47,9 +47,16 @@ type settingsItem struct {
 func (m Model) settingsItemsForTab(tabID string) []settingsItem {
 	switch tabID {
 	case "account":
+		l1, l2 := "Sign in (OAuth)", "Sign in (Browser Headers)"
+		d1, d2 := "Connect using Google client_secret.json", "Connect by pasting request headers"
+		if m.isAuthenticated {
+			l1, l2 = "Reconnect (OAuth)", "Reconnect (Browser Headers)"
+			d1 = "You are currently authenticated. Press Enter to re-authenticate."
+			d2 = "You are currently authenticated. Press Enter to re-authenticate."
+		}
 		return []settingsItem{
-			{kindAction, "Sign in (OAuth)", "Connect using Google client_secret.json", "settings_oauth", "account"},
-			{kindAction, "Sign in (Browser Headers)", "Connect by pasting request headers", "settings_auth_headers", "account"},
+			{kindAction, l1, d1, "settings_oauth", "account"},
+			{kindAction, l2, d2, "settings_auth_headers", "account"},
 			{kindToggle, "Send listening history", "Allow YouTube Music to personalise recommendations", "settings_history", "account"},
 		}
 	case "playback":
@@ -627,19 +634,20 @@ func (m Model) renderSettingsAccount(w int, items []settingsItem) string {
 
 func (m Model) renderOAuthFlow() string {
 	var sb strings.Builder
-	if m.oauthState == 1 {
+	switch m.oauthState {
+	case 1:
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Enter path to client_secret.json (or raw Client ID):"))
 		sb.WriteString("\n\n")
 		sb.WriteString(m.oauthInput.View())
 		sb.WriteString("\n\n")
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Press Enter to continue  ·  Esc to cancel"))
-	} else if m.oauthState == 2 {
+	case 2:
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Enter Client Secret:"))
 		sb.WriteString("\n\n")
 		sb.WriteString(m.oauthInput.View())
 		sb.WriteString("\n\n")
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Press Enter to continue  ·  Esc to cancel"))
-	} else if m.oauthState == 3 {
+	case 3:
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Waiting for authorization..."))
 		sb.WriteString("\n\n")
 		if m.oauthCodeResp != nil {

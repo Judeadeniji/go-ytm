@@ -3,6 +3,7 @@ package search
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +16,38 @@ import (
 	youtube "github.com/kkdai/youtube/v2"
 )
 
+// authRoundTripper injects auth headers from ytmusicapi state to bypass 429s.
+type authRoundTripper struct {
+	transport http.RoundTripper
+}
+
+func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	path := os.ExpandEnv("$HOME/.local/state/go-ytm/headers_auth.json")
+	if data, err := os.ReadFile(path); err == nil {
+		var content map[string]any
+		if json.Unmarshal(data, &content) == nil {
+			if token, ok := content["access_token"].(string); ok && token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			} else {
+				for k, v := range content {
+					if strV, ok := v.(string); ok {
+						lowerK := strings.ToLower(k)
+						if lowerK == "cookie" || lowerK == "user-agent" || lowerK == "authorization" || strings.HasPrefix(lowerK, "x-youtube") || strings.HasPrefix(lowerK, "x-goog") {
+							req.Header.Set(k, strV)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	transport := a.transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	return transport.RoundTrip(req)
+}
+
 // Extractor manages extraction of stream URLs using kkdai/youtube and yt-dlp fallback
 type Extractor struct {
 	client *youtube.Client
@@ -24,7 +57,10 @@ func NewExtractor() *Extractor {
 	return &Extractor{
 		client: &youtube.Client{
 			// Bound orphaned GetVideo work after ctx cancel (library ignores cancel).
-			HTTPClient: &http.Client{Timeout: 18 * time.Second},
+			HTTPClient: &http.Client{
+				Timeout:   18 * time.Second,
+				Transport: &authRoundTripper{},
+			},
 		},
 	}
 }
@@ -118,7 +154,30 @@ func (e *Extractor) getStreamURLYtDlp(ctx context.Context, videoID string) (stri
 	}
 
 	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-	cmd := exec.CommandContext(ctx, bin, "-g", "-f", "bestaudio/bestaudio*/best", "--no-playlist", url)
+	
+	args := []string{"-g", "-f", "bestaudio/bestaudio*/best", "--no-playlist"}
+	
+	path := os.ExpandEnv("$HOME/.local/state/go-ytm/headers_auth.json")
+	if data, err := os.ReadFile(path); err == nil {
+		var content map[string]any
+		if json.Unmarshal(data, &content) == nil {
+			if token, ok := content["access_token"].(string); ok && token != "" {
+				args = append(args, "--add-header", "Authorization: Bearer "+token)
+			} else {
+				for k, v := range content {
+					if strV, ok := v.(string); ok {
+						lowerK := strings.ToLower(k)
+						if lowerK == "cookie" || lowerK == "user-agent" || lowerK == "authorization" || strings.HasPrefix(lowerK, "x-youtube") || strings.HasPrefix(lowerK, "x-goog") {
+							args = append(args, "--add-header", fmt.Sprintf("%s: %s", k, strV))
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	args = append(args, url)
+	cmd := exec.CommandContext(ctx, bin, args...)
 
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
