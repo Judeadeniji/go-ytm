@@ -13,7 +13,10 @@ func (m Model) generateExploreContent(mainWidth int) string {
 		return lipgloss.NewStyle().Foreground(colorSubtext).Render("Loading explore...")
 	}
 	if m.exploreErr != "" {
-		return lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.exploreErr)
+		errText := lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.exploreErr)
+		retryBtn := lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorText).Padding(0, 2).Render("Retry")
+		retryBtn = m.zone.Mark("retry_page", retryBtn)
+		return lipgloss.NewStyle().Padding(2).Render(errText + "\n\n" + retryBtn)
 	}
 	if m.exploreData == nil {
 		return ""
