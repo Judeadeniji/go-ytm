@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	termimg "github.com/blacktop/go-termimg"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -94,19 +93,11 @@ func fitArtBox(s string, width, height int) string {
 
 
 
-// renderWithTermimg uses go-termimg (Halfblocks) as the primary renderer.
 // mosaic treats Width/Height as pixel samples stepped 2×2 per cell, so we
 // request 2× the desired character-cell size. ANSI halfblocks is fallback only.
 func renderWithTermimg(img image.Image, width, height int) string {
-	rendered, err := termimg.New(img).
-		Width(width * 2).
-		Height(height * 2).
-		Scale(termimg.ScaleStretch).
-		Protocol(termimg.Halfblocks).
-		Render()
-	if err == nil && rendered != "" {
-		return rendered
-	}
+	// Bypass termimg which generates unoptimized, heavy ANSI with redundant sequences and resets.
+	// We use our heavily optimized ansiHalfblocks instead.
 	return ansiHalfblocks(img, width, height)
 }
 
@@ -162,15 +153,34 @@ func ansiHalfblocks(img image.Image, width, height int) string {
 	scaled := resizeNearest(img, width, height*2)
 
 	var sb strings.Builder
+	// Pre-allocate to reduce allocations
+	sb.Grow(width * height * 20)
+
 	for y := 0; y < height*2; y += 2 {
+		var lastFg, lastBg uint32 = 0xFFFFFFFF, 0xFFFFFFFF // Invalid initial colors
+		
 		for x := 0; x < width; x++ {
 			r1, g1, b1, _ := scaled.At(x, y).RGBA()
 			r2, g2, b2, _ := scaled.At(x, y+1).RGBA()
-			style := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r1>>8, g1>>8, b1>>8))).
-				Background(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r2>>8, g2>>8, b2>>8)))
-			sb.WriteString(style.Render("▀"))
+			
+			// Extract 8-bit RGB
+			r1, g1, b1 = r1>>8, g1>>8, b1>>8
+			r2, g2, b2 = r2>>8, g2>>8, b2>>8
+			
+			fg := (r1 << 16) | (g1 << 8) | b1
+			bg := (r2 << 16) | (g2 << 8) | b2
+			
+			if fg != lastFg {
+				sb.WriteString(fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r1, g1, b1))
+				lastFg = fg
+			}
+			if bg != lastBg {
+				sb.WriteString(fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r2, g2, b2))
+				lastBg = bg
+			}
+			sb.WriteString("▀")
 		}
+		sb.WriteString("\x1b[0m") // Reset at the end of each line
 		if y < (height*2)-2 {
 			sb.WriteString("\n")
 		}
