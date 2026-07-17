@@ -61,6 +61,7 @@ type Model struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthCodeResp     *ytmapi.OAuthCodeResponse
+	userProfile       *ytmapi.UserProfile
 
 	searchResults   []ytmapi.SearchResult
 	searchFilter    string // api filter: "", songs, albums, artists, playlists
@@ -136,6 +137,7 @@ type Model struct {
 	artistPage     *ytmapi.ArtistPage
 	albumPage      *ytmapi.AlbumPage
 	playlistPage   *ytmapi.PlaylistPage
+	pageCache      map[string]any
 	trackCursor    int // focus index within playlist/album tracklist
 	listCursor     int // search / artist / sidebar / suggestions
 	homeCardCursor int // card index within active home carousel
@@ -247,19 +249,24 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		lyricsFollow:      true,
 		lyricsCursor:      -1,
 		streamCache:       make(map[string]cachedStream),
+		pageCache:         make(map[string]any),
 		preloadInflight:   make(map[string]struct{}),
 		preloadCancel:     make(map[string]context.CancelFunc),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		loadSession(m.sessionStore),
 		fetchHome(m.ytmapiClient),
 		tickPlayProgress(),
 		listenTrackEnded(m.player),
 		tickSessionPersist(),
-	)
+	}
+	if m.isAuthenticated {
+		cmds = append(cmds, fetchProfile(m.ytmapiClient))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -878,6 +885,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncLyricsFollowOffset()
 		}
 		return m, nil
+	case ProfileMsg:
+		if msg.Err == nil && msg.Profile != nil && msg.Profile.Name != "" {
+			m.userProfile = msg.Profile
+			if m.activeMenu == "Home" || m.activeMenu == "Library" || m.onHomeScreen() {
+				m.setMainContent()
+			}
+		}
+		return m, nil
 	case playerErrMsg:
 		if msg.Err != nil {
 			if msg.Op == "pause" {
@@ -1148,21 +1163,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pageLoading = false
 		if msg.Err != nil || msg.Page == nil {
-			m.pageErr = fmtErr(msg.Err)
+			errStr := fmtErr(msg.Err)
 			if msg.Page == nil && msg.Err == nil {
-				m.pageErr = "empty artist response"
+				errStr = "empty artist response"
 			}
-			m.statusMsg = "Artist unavailable"
+			m.statusMsg = "Artist update failed: " + errStr
+			if m.artistPage == nil {
+				m.pageErr = errStr
+			}
 			m.setMainContent()
 			return m, nil
 		}
-		m.artistPage = msg.Page
-		m.listCursor = 0
-		m.pageErr = ""
+		
 		id := msg.RequestID
 		if id == "" {
 			id = msg.Page.ChannelID
 		}
+		m.pageCache["artist_"+id] = msg.Page
+		m.artistPage = msg.Page
+		m.listCursor = 0
+		m.pageErr = ""
+
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenArtist, ID: id, Title: msg.Page.Name})
 		m.statusMsg = msg.Page.Name
 		m.markSessionDirty()
@@ -1201,14 +1222,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pageLoading = false
 		if msg.Err != nil || msg.Page == nil {
-			m.pageErr = fmtErr(msg.Err)
+			errStr := fmtErr(msg.Err)
 			if msg.Page == nil && msg.Err == nil {
-				m.pageErr = "empty album response"
+				errStr = "empty album response"
 			}
-			m.statusMsg = "Album unavailable"
+			m.statusMsg = "Album update failed: " + errStr
+			if m.albumPage == nil {
+				m.pageErr = errStr
+			}
 			m.setMainContent()
 			return m, nil
 		}
+		
+		m.pageCache["album_"+msg.BrowseID] = msg.Page
 		m.albumPage = msg.Page
 		m.pageErr = ""
 		n := len(msg.Page.Tracks)
@@ -1229,14 +1255,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pageLoading = false
 		if msg.Err != nil || msg.Page == nil {
-			m.pageErr = fmtErr(msg.Err)
+			errStr := fmtErr(msg.Err)
 			if msg.Page == nil && msg.Err == nil {
-				m.pageErr = "empty playlist response"
+				errStr = "empty playlist response"
 			}
-			m.statusMsg = "Playlist unavailable"
+			m.statusMsg = "Playlist update failed: " + errStr
+			if m.playlistPage == nil {
+				m.pageErr = errStr
+			}
 			m.setMainContent()
 			return m, nil
 		}
+		
+		m.pageCache["playlist_"+msg.Page.ID] = msg.Page
 		m.playlistPage = msg.Page
 		m.pageErr = ""
 		n := len(msg.Page.Tracks)

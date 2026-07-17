@@ -12,6 +12,10 @@ func (m Model) generateSidebarContent(leftWidth int) string {
 	// Top Header
 	logo := lipgloss.NewStyle().Foreground(colorRed).Render("▶ ") + lipgloss.NewStyle().Bold(true).Render("Music")
 	sb.WriteString(lipgloss.NewStyle().Padding(1, 2).Render("≡   " + logo))
+	sb.WriteString("\n")
+	if m.userProfile != nil && m.userProfile.Name != "" {
+		sb.WriteString(lipgloss.NewStyle().Padding(0, 2).Foreground(colorSubtext).Render(m.userProfile.Name))
+	}
 	sb.WriteString("\n\n")
 
 	// Menu Items
@@ -57,21 +61,31 @@ func (m Model) generateSidebarContent(leftWidth int) string {
 	}
 	sb.WriteString("\n\n")
 
+	// Playlists Header
+	sb.WriteString(lipgloss.NewStyle().Padding(0, 2).Foreground(colorSubtext).Bold(true).Render("PLAYLISTS"))
+	sb.WriteString("\n\n")
+
 	// New Playlist button
-	newBtn := lipgloss.NewStyle().
-		Background(colorHover).
-		Foreground(colorText).
-		Padding(0, 2).
-		Render("+ New playlist")
-	sb.WriteString("   ")
+	newBtn := lipgloss.NewStyle().Foreground(colorText).Render("  +  New playlist")
 	sb.WriteString(newBtn)
-	sb.WriteString("\n\n\n")
+	sb.WriteString("\n\n")
 
 	// Playlists
 	for _, pl := range m.playlists {
-		title := lipgloss.NewStyle().Bold(true).Render(pl[0])
-		sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(pl[1])
-		sb.WriteString(lipgloss.NewStyle().Padding(0, 2).Render(title + "\n" + sub))
+		// Single line compact rendering for TUI
+		title := pl[0]
+		// Shorten title if needed
+		if len(title) > leftWidth-8 && leftWidth > 8 {
+			title = title[:leftWidth-9] + "…"
+		}
+		
+		icon := "" // Music note icon
+		if strings.Contains(pl[1], "Auto playlist") || strings.Contains(pl[0], "Liked") {
+			icon = "" // Heart icon
+		}
+
+		line := lipgloss.NewStyle().Foreground(colorSubtext).Render("  " + icon + "  " + title)
+		sb.WriteString(line)
 		sb.WriteString("\n\n")
 	}
 	

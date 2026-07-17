@@ -229,6 +229,21 @@ func fetchLyrics(client *lyrics.Client, trackKey, title, artist, album string, d
 	}
 }
 
+type ProfileMsg struct {
+	Profile *ytmapi.UserProfile
+	Err     error
+}
+
+func fetchProfile(apiClient *ytmapi.Client) tea.Cmd {
+	return func() tea.Msg {
+		if apiClient == nil {
+			return ProfileMsg{Err: fmt.Errorf("no api client")}
+		}
+		prof, err := apiClient.GetProfile(context.Background())
+		return ProfileMsg{Profile: prof, Err: err}
+	}
+}
+
 func stopPlayback(p *player.Player) tea.Cmd {
 	return func() tea.Msg {
 		if p == nil {

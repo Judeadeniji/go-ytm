@@ -88,11 +88,25 @@ func (m Model) beginSearch(query string) (Model, tea.Cmd) {
 
 func (m Model) openArtist(channelID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading artist…")
+	if cached, ok := m.pageCache["artist_"+channelID].(*ytmapi.ArtistPage); ok {
+		m.artistPage = cached
+		m.pageLoading = false
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenArtist, ID: channelID, Title: cached.Name})
+		m.statusMsg = "Updating " + cached.Name + "..."
+		m.setMainContent()
+	}
 	return m, fetchArtist(m.ytmapiClient, channelID, m.navGen, m.navCtx)
 }
 
 func (m Model) openAlbum(browseID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading album…")
+	if cached, ok := m.pageCache["album_"+browseID].(*ytmapi.AlbumPage); ok {
+		m.albumPage = cached
+		m.pageLoading = false
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenAlbum, ID: browseID, Title: cached.Title})
+		m.statusMsg = "Updating " + cached.Title + "..."
+		m.setMainContent()
+	}
 	return m, fetchAlbum(m.ytmapiClient, browseID, m.navGen, m.navCtx)
 }
 
@@ -174,6 +188,13 @@ func isAlbumAudioPlaylistID(id string) bool {
 
 func (m Model) openPlaylist(playlistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading playlist…")
+	if cached, ok := m.pageCache["playlist_"+playlistID].(*ytmapi.PlaylistPage); ok {
+		m.playlistPage = cached
+		m.pageLoading = false
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenPlaylist, ID: playlistID, Title: cached.Title})
+		m.statusMsg = "Updating " + cached.Title + "..."
+		m.setMainContent()
+	}
 	return m, fetchPlaylist(m.ytmapiClient, playlistID, m.navGen, m.navCtx)
 }
 

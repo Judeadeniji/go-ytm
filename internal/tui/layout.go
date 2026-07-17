@@ -1,7 +1,7 @@
 package tui
 
 const (
-	leftSidebarWidth  = 24
+	leftSidebarWidth  = 28
 	rightSidebarWidth = 36
 	// Terminal must leave room for left + right + a usable main pane.
 	minWidthForQueuePanel = leftSidebarWidth + rightSidebarWidth + 40
