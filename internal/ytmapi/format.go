@@ -24,7 +24,6 @@ func FormatCount(raw string) string {
 	} {
 		if strings.HasSuffix(lower, suf) {
 			s = strings.TrimSpace(s[:len(s)-len(suf)])
-			lower = strings.ToLower(s)
 			break
 		}
 	}
