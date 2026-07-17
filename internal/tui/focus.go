@@ -360,6 +360,20 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 			m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
 			return m, m.enqueueVisibleImages(m.mainWidth())
 		}
+		if item == "Explore" {
+			mm, cmd := m.openExplore()
+			mm.leftViewport.SetContent(mm.generateSidebarContent(leftSidebarWidth))
+			return mm, tea.Batch(cmd, mm.enqueueVisibleImages(mm.mainWidth()))
+		}
+		if item == "Library" {
+			m.activeMenu = item
+			m = m.leaveDetailPages()
+			m.markSessionDirty()
+			m.setMainContent()
+			m.mainViewport.YOffset = 0
+			m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+			return m, fetchLibraryTab(m.ytmapiClient, m.sessionStore, m.libraryTab)
+		}
 		m.activeMenu = item
 		m = m.leaveDetailPages()
 		m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))

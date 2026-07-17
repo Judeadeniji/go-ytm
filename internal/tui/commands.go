@@ -205,18 +205,49 @@ func fetchSongDetails(api *ytmapi.Client, videoID string, gen int, ctx context.C
 	}
 }
 
-func fetchLyrics(client *lyrics.Client, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
+func fetchLyrics(client *lyrics.Client, db *library.DB, videoID, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		if client == nil {
-			return LyricsMsg{Gen: gen, TrackKey: trackKey, Err: fmt.Errorf("lyrics unavailable")}
-		}
 		if ctx == nil {
 			ctx = context.Background()
+		}
+
+		// 1. Try local cache first
+		if db != nil && videoID != "" {
+			c, err := db.GetLyricsCache(videoID)
+			if err == nil && c != nil {
+				var lines []lyrics.Line
+				if c.Synced != "" {
+					lines = lyrics.ParseLRC(c.Synced)
+				}
+				return LyricsMsg{
+					Gen:          gen,
+					TrackKey:     trackKey,
+					Instrumental: c.Instrumental,
+					Plain:        c.Plain,
+					Lines:        lines,
+					Err:          nil,
+				}
+			}
+		}
+
+		// 2. Fallback to API
+		if client == nil {
+			return LyricsMsg{Gen: gen, TrackKey: trackKey, Err: fmt.Errorf("lyrics unavailable")}
 		}
 		res, err := client.FetchForTrack(ctx, title, artist, album, durationSec)
 		if err != nil {
 			return LyricsMsg{Gen: gen, TrackKey: trackKey, Err: err}
 		}
+
+		// 3. Save to cache
+		if db != nil && videoID != "" {
+			_ = db.SaveLyricsCache(videoID, library.CachedLyrics{
+				Instrumental: res.Instrumental,
+				Plain:        res.Plain,
+				Synced:       res.RawSynced, // Use the raw synced lyrics string
+			})
+		}
+
 		return LyricsMsg{
 			Gen:          gen,
 			TrackKey:     trackKey,

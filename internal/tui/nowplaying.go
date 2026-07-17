@@ -95,22 +95,65 @@ func (m Model) generateNowPlayingBody(width, height int) string {
 		right := lipgloss.NewStyle().
 			Width(rightW).Height(height).MaxHeight(height).
 			Padding(1, 2, 1, 0).
-			Render(m.renderLyricsPane(rightW-2, height-2))
+			Render(m.renderNowPlayingRightPane(rightW-2, height-2))
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	}
 
-	// Narrow: stack metadata then lyrics.
+	// Narrow: stack metadata then right pane.
 	metaBlock := lipgloss.NewStyle().Width(width).Padding(1, 2).Render(meta.String())
 	metaH := lipgloss.Height(metaBlock)
-	lyricsH := height - metaH
-	if lyricsH < 3 {
-		lyricsH = 3
+	rightH := height - metaH
+	if rightH < 3 {
+		rightH = 3
 	}
-	lyricsBlock := lipgloss.NewStyle().
-		Width(width).Height(lyricsH).MaxHeight(lyricsH).
+	rightBlock := lipgloss.NewStyle().
+		Width(width).Height(rightH).MaxHeight(rightH).
 		Padding(0, 2).
-		Render(m.renderLyricsPane(width-4, lyricsH))
-	return lipgloss.JoinVertical(lipgloss.Left, metaBlock, lyricsBlock)
+		Render(m.renderNowPlayingRightPane(width-4, rightH))
+	return lipgloss.JoinVertical(lipgloss.Left, metaBlock, rightBlock)
+}
+
+func (m Model) renderNowPlayingRightPane(width, height int) string {
+	if m.nowPlayingTab == "" {
+		m.nowPlayingTab = "lyrics"
+	}
+
+	var tabs []string
+	for _, t := range []string{"lyrics", "related", "queue"} {
+		style := lipgloss.NewStyle().Foreground(colorSubtext).Padding(0, 1)
+		if m.nowPlayingTab == t {
+			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Padding(0, 1)
+		}
+		label := strings.ToUpper(t[:1]) + t[1:]
+		tabs = append(tabs, m.zone.Mark("np_tab_"+t, style.Render(label)))
+	}
+	header := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	header = lipgloss.NewStyle().PaddingBottom(1).Render(header)
+
+	headerH := lipgloss.Height(header)
+	bodyH := height - headerH
+	if bodyH < 1 {
+		bodyH = 1
+	}
+
+	var body string
+	switch m.nowPlayingTab {
+	case "lyrics":
+		body = m.renderLyricsPaneBody(width, bodyH)
+	case "related":
+		body = m.renderRelatedPaneBody(width, bodyH)
+	case "queue":
+		body = m.generateQueuePanelContent(width)
+	default:
+		body = m.renderLyricsPaneBody(width, bodyH)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+}
+
+func (m Model) renderRelatedPaneBody(width, height int) string {
+	hint := lipgloss.NewStyle().Foreground(colorSubtext).Render("Related tracks & radio coming soon...")
+	return lipgloss.NewStyle().Padding(2).Render(hint)
 }
 
 func (m Model) lyricsHeaderLabel() string {
@@ -129,7 +172,7 @@ func (m Model) lyricsHintLine(width int) string {
 	return lipgloss.NewStyle().Foreground(colorSubtext).MaxWidth(max(8, width)).Render(hint)
 }
 
-func (m Model) renderLyricsPane(width, height int) string {
+func (m Model) renderLyricsPaneBody(width, height int) string {
 	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(m.lyricsHeaderLabel())
 	hintH := 1
 	bodyH := max(1, height-2-hintH) // header + blank + hint
@@ -185,7 +228,7 @@ func (m Model) buildSyncedLyricsContent(width int) (string, int) {
 		cursor = active
 	}
 
-		innerW := max(8, width)
+	innerW := max(8, width)
 	var sb strings.Builder
 	for i, ln := range m.lyricsLines {
 		text := ln.Text
@@ -560,6 +603,8 @@ func (m *Model) ensureLyricsFetched() tea.Cmd {
 	album := m.currentTrack.Album
 	return fetchLyrics(
 		m.lyricsClient,
+		m.sessionStore,
+		m.currentTrack.VideoID,
 		key,
 		m.currentTrack.Title,
 		m.currentTrack.Artist,

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -251,25 +252,112 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 	header := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(headerText)
 	mb.WriteString(header)
 	mb.WriteString("\n\n")
-	if !m.isAuthenticated {
+
+	chipFilters := []struct {
+		label string
+		value string
+	}{
+		{"Playlists", "playlists"},
+		{"Songs", "songs"},
+		{"Albums", "albums"},
+		{"Artists", "artists"},
+		{"Downloads", "downloads"},
+	}
+
+	var chips []string
+	for _, c := range chipFilters {
+		s := lipgloss.NewStyle().Padding(0, 2).Foreground(colorText).Background(colorSearchBg)
+		if m.libraryTab == c.value {
+			s = s.Background(colorText).Foreground(colorBg).Bold(true)
+		}
+		ch := m.zone.Mark(fmt.Sprintf("lib_tab_%s", c.value), s.Render(c.label))
+		chips = append(chips, ch)
+	}
+	mb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, chips...))
+	mb.WriteString("\n\n")
+
+	if !m.isAuthenticated && m.libraryTab != "downloads" {
 		mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Sign in coming later — library sync needs YouTube Music auth."))
 		mb.WriteString("\n\n")
+		return mb.String()
 	}
-	for _, pl := range m.playlists {
-		title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(pl[0])
-		sub := lipgloss.NewStyle().Foreground(colorSubtext).Render(pl[1])
-		art := artPlaceholder()
-		if m.cachedArt != nil && m.cachedArt.Spacer != "" {
-			art = m.cachedArt.Spacer
+
+	switch m.libraryTab {
+	case "playlists":
+		if len(m.libPlaylists) == 0 {
+			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No playlists found."))
+		} else {
+			for _, pl := range m.libPlaylists {
+				title, _ := pl["title"].(string)
+				desc := "Playlist"
+				if author, ok := pl["author"].(string); ok && author != "" {
+					desc = "by " + author
+				}
+				titleStyled := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
+				subStyled := lipgloss.NewStyle().Foreground(colorSubtext).Render(desc)
+				art := artPlaceholder() // we can load real thumbnails later
+				row := lipgloss.JoinHorizontal(lipgloss.Top, art, "   ", lipgloss.JoinVertical(lipgloss.Left, titleStyled, "\n"+subStyled))
+				mb.WriteString(row)
+				mb.WriteString("\n\n")
+			}
 		}
-		row := lipgloss.JoinHorizontal(lipgloss.Top, art, "   ", lipgloss.JoinVertical(lipgloss.Left, title, "\n"+sub))
-		mb.WriteString(row)
-		mb.WriteString("\n\n")
+	case "songs":
+		if len(m.libSongs) == 0 {
+			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No songs found."))
+		} else {
+			for _, s := range m.libSongs {
+				title, _ := s["title"].(string)
+				mb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render("🎵 " + title))
+				mb.WriteString("\n\n")
+			}
+		}
+	case "albums":
+		if len(m.libAlbums) == 0 {
+			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No albums found."))
+		} else {
+			for _, a := range m.libAlbums {
+				title, _ := a["title"].(string)
+				mb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render("💿 " + title))
+				mb.WriteString("\n\n")
+			}
+		}
+	case "artists":
+		if len(m.libArtists) == 0 {
+			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No artists found."))
+		} else {
+			for _, a := range m.libArtists {
+				name, _ := a["artist"].(string)
+				mb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render("👤 " + name))
+				mb.WriteString("\n\n")
+			}
+		}
+	case "downloads":
+		if len(m.libDownloads) == 0 {
+			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No downloaded tracks."))
+		} else {
+			for _, t := range m.libDownloads {
+				titleStyled := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(t.Title)
+				subParts := []string{}
+				if t.Artist != "" {
+					subParts = append(subParts, t.Artist)
+				}
+				if t.Album != "" {
+					subParts = append(subParts, t.Album)
+				}
+				if t.Duration != "" {
+					subParts = append(subParts, t.Duration)
+				}
+				subStyled := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(subParts, " · "))
+				art := artPlaceholder()
+				row := lipgloss.JoinHorizontal(lipgloss.Top, art, "   ", lipgloss.JoinVertical(lipgloss.Left, titleStyled, "\n"+subStyled))
+				mb.WriteString(row)
+				mb.WriteString("\n\n")
+			}
+		}
 	}
-	_ = mainWidth
+
 	return mb.String()
 }
-
 
 func (m Model) generateSearchResultsContent(mainWidth int) string {
 	var mb strings.Builder
@@ -487,7 +575,7 @@ func (m Model) renderMixCarousel(index int, title string, cards []ytmapi.HomeCar
 
 		titleColor := colorText
 		focused := m.focusedHomeCard(index, cardIndex)
-		
+
 		bg := lipgloss.Color("#1A1025") // slight purple tint for mix background
 		if focused {
 			bg = lipgloss.Color("#3A2055") // brighter purple for focus

@@ -470,6 +470,16 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 		}
 	}
 
+	// Library tab chips
+	for _, f := range []string{"playlists", "songs", "albums", "artists", "downloads"} {
+		if m.zone.Get("lib_tab_"+f).InBounds(mouse) {
+			m.libraryTab = f
+			m.pageLoading = true
+			m.setMainContent()
+			return m, fetchLibraryTab(m.ytmapiClient, m.sessionStore, f), true
+		}
+	}
+
 	// Collect clickable IDs from current pages / search / home
 	// Artist related / album opens
 	if sc, ok := m.stack.Current(); ok {
@@ -609,6 +619,11 @@ func (m Model) clickArtistZones(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 
 func (m Model) dispatchZone(zid, title, artist, thumb string) (Model, tea.Cmd, bool) {
 	switch {
+	case strings.HasPrefix(zid, "np_tab_"):
+		tab := strings.TrimPrefix(zid, "np_tab_")
+		m.nowPlayingTab = tab
+		m.setMainContent()
+		return m, nil, true
 	case zid == "retry_page":
 		return m.retryCurrentPage()
 	case strings.HasPrefix(zid, "play_video_"):

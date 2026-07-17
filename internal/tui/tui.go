@@ -79,6 +79,7 @@ type Model struct {
 	statusMsg string
 
 	nowPlayingOpen     bool
+	nowPlayingTab      string // "lyrics", "related", "queue"
 	lyricsLoading      bool
 	lyricsInstrumental bool
 	lyricsErr          string
@@ -173,7 +174,6 @@ type Model struct {
 	exploreErr        string
 	moodCategories    map[string][]ytmapi.MoodCategory
 	moodCatsLoading   bool
-	activeMoodSection string
 	activeMoodParams  string
 	moodPlaylists     []map[string]any
 	chartsData        *ytmapi.ChartsData
@@ -422,17 +422,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.toggleNowPlaying()
 		case "tab":
 			if m.nowPlayingOpen {
-				// Cycle between NP body and queue rail only.
-				if m.activePane == PaneQueue {
-					m.activePane = PaneMain
-				} else if m.showQueuePanel() {
-					m.activePane = PaneQueue
-					m.queueCursor = m.queue.CurrentIndex()
-					if m.queueCursor < 0 {
-						m.queueCursor = 0
-					}
-					m.setQueuePanelContent()
+				tabs := []string{"lyrics", "related", "queue"}
+				current := m.nowPlayingTab
+				if current == "" {
+					current = "lyrics"
 				}
+				for i, t := range tabs {
+					if t == current {
+						m.nowPlayingTab = tabs[(i+1)%len(tabs)]
+						break
+					}
+				}
+				m.setMainContent()
 				return m, nil
 			}
 			m.activePane = m.nextPane()
@@ -942,9 +943,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if msg.Op == "mute" {
 				m.muted = !m.muted
-			}
-			if msg.Op == "volume" {
-				// Best-effort: re-read is hard; surface error only.
 			}
 			op := msg.Op
 			if op == "" {
@@ -1636,6 +1634,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.zone.Get("np_album").InBounds(mouseMsg) || m.zone.Get("np_view_album").InBounds(mouseMsg) {
 				return m.goToPlayingAlbum()
 			}
+			for _, t := range []string{"lyrics", "related", "queue"} {
+				if m.zone.Get("np_tab_" + t).InBounds(mouseMsg) {
+					m.nowPlayingTab = t
+					m.setMainContent()
+					return m, nil
+				}
+			}
 			if mm, cmd, handled := m.handleRailPanelClick(mouseMsg); handled {
 				return mm, cmd
 			}
@@ -1824,6 +1829,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						mm, cmd := m.openExplore()
 						mm.leftViewport.SetContent(mm.generateSidebarContent(leftSidebarWidth))
 						return mm, tea.Batch(cmd, mm.enqueueVisibleImages(mm.mainWidth()))
+					}
+					if item == "Library" {
+						m.activeMenu = item
+						m = m.leaveDetailPages()
+						m.markSessionDirty()
+						m.setMainContent()
+						m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+						return m, fetchLibraryTab(m.ytmapiClient, m.sessionStore, m.libraryTab)
 					}
 					m.activeMenu = item
 					m = m.leaveDetailPages()

@@ -47,9 +47,6 @@ const (
 	coverWidth  = 18
 	coverHeight = 8
 
-	thumbWidth  = 4
-	thumbHeight = 2
-
 	sugArtWidth  = 8
 	sugArtHeight = 3
 )
