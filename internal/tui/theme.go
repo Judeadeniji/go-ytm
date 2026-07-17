@@ -14,10 +14,4 @@ var (
 	colorBuffer   = lipgloss.Color("#5A5A5A") // buffered/loaded overlay under playhead
 	colorAccent   = lipgloss.Color("#FF0000") // YouTube red — active / playing
 	colorFocusBg  = lipgloss.Color("#282828")
-	colorCardArt  = []lipgloss.Color{
-		lipgloss.Color("#3E2723"), lipgloss.Color("#1B5E20"), lipgloss.Color("#B71C1C"),
-		lipgloss.Color("#4E342E"), lipgloss.Color("#263238"), lipgloss.Color("#827717"),
-	}
-
-	baseStyle = lipgloss.NewStyle().Background(colorBg).Foreground(colorText)
 )

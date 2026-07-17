@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -47,7 +48,8 @@ func (m Model) settingsItemsForTab(tabID string) []settingsItem {
 	switch tabID {
 	case "account":
 		return []settingsItem{
-			{kindAction, "Sign in to YouTube Music", "Connect your Google account using browser headers", "settings_auth_headers", "account"},
+			{kindAction, "Sign in (OAuth)", "Connect using Google client_secret.json", "settings_oauth", "account"},
+			{kindAction, "Sign in (Browser Headers)", "Connect by pasting request headers", "settings_auth_headers", "account"},
 			{kindToggle, "Send listening history", "Allow YouTube Music to personalise recommendations", "settings_history", "account"},
 		}
 	case "playback":
@@ -222,9 +224,15 @@ func (m Model) HandleSettingsKey(key string) (Model, tea.Cmd, bool) {
 func (m Model) settingsActivate(it settingsItem) (Model, tea.Cmd) {
 	switch it.ZoneID {
 	// account
+	case "settings_oauth":
+		m.oauthState = 1
+		m.oauthInput.Placeholder = "Path to client_secret.json (or raw Client ID)"
+		m.oauthInput.Reset()
+		m.oauthInput.Focus()
+		return m, textinput.Blink
 	case "settings_auth_headers":
 		m.authState = 1
-		return m, m.openEditorForHeadersCmd() // Blink already in effect from Focus
+		return m, m.openEditorForHeadersCmd()
 	case "settings_history":
 		m.statusMsg = "Listening history toggle (coming soon)"
 		return m, nil
@@ -599,20 +607,48 @@ func (m Model) renderSettingsAccount(w int, items []settingsItem) string {
 	var sb strings.Builder
 	sb.WriteString(settingsSectionHeader("Account"))
 
-	// Auth state machine card (replaces the normal row when active)
 	if m.authState > 0 {
 		sb.WriteString(settingsCard(w, m.renderAuthFlow()))
+	} else if m.oauthState > 0 {
+		sb.WriteString(settingsCard(w, m.renderOAuthFlow()))
 	} else {
-		rows := m.renderItemGroup(items, []int{0}, w)
+		rows := m.renderItemGroup(items, []int{0, 1}, w)
 		sb.WriteString(settingsCard(w, rows))
 	}
 
 	sb.WriteString(settingsSectionHeader("Privacy"))
-	rows := m.renderItemGroup(items, []int{1}, w)
+	rows := m.renderItemGroup(items, []int{2}, w)
 	sb.WriteString(settingsCard(w, rows))
 
 	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).
-		Render("Press Enter on 'Sign in' to open your editor and paste browser headers."))
+		Render("Provide client_secret.json path, or use browser headers via your editor."))
+	return sb.String()
+}
+
+func (m Model) renderOAuthFlow() string {
+	var sb strings.Builder
+	if m.oauthState == 1 {
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Enter path to client_secret.json (or raw Client ID):"))
+		sb.WriteString("\n\n")
+		sb.WriteString(m.oauthInput.View())
+		sb.WriteString("\n\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Press Enter to continue  ·  Esc to cancel"))
+	} else if m.oauthState == 2 {
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Enter Client Secret:"))
+		sb.WriteString("\n\n")
+		sb.WriteString(m.oauthInput.View())
+		sb.WriteString("\n\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Press Enter to continue  ·  Esc to cancel"))
+	} else if m.oauthState == 3 {
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Waiting for authorization..."))
+		sb.WriteString("\n\n")
+		if m.oauthCodeResp != nil {
+			sb.WriteString(fmt.Sprintf("1. Open: %s\n", lipgloss.NewStyle().Foreground(colorAccent).Render(m.oauthCodeResp.VerificationURL)))
+			sb.WriteString(fmt.Sprintf("2. Enter code: %s", lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render(m.oauthCodeResp.UserCode)))
+		} else {
+			sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Generating code..."))
+		}
+	}
 	return sb.String()
 }
 

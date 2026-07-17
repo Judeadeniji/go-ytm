@@ -92,10 +92,7 @@ func fitArtBox(s string, width, height int) string {
 		Render(s)
 }
 
-// fitArt forces card-sized art into the default art box.
-func fitArt(s string) string {
-	return fitArtBox(s, artWidth, artHeight)
-}
+
 
 // renderWithTermimg uses go-termimg (Halfblocks) as the primary renderer.
 // mosaic treats Width/Height as pixel samples stepped 2×2 per cell, so we

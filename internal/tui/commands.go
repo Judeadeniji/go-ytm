@@ -31,12 +31,7 @@ type streamReadyMsg struct {
 	Cached bool // served from preload cache
 }
 
-func fetchStreamURL(ext *search.Extractor, videoID string) tea.Cmd {
-	return func() tea.Msg {
-		url, err := ext.GetStreamURL(context.Background(), videoID)
-		return StreamURLMsg{URL: url, Err: err}
-	}
-}
+
 
 // playTrack resolves a stream URL for t. Pair with stopPlayback via tea.Sequence
 // (not Batch) so Stop cannot race a subsequent Load.
@@ -265,9 +260,7 @@ type SearchResultsMsg struct {
 	Err     error
 }
 
-func doSearch(apiClient *ytmapi.Client, query string, gen int) tea.Cmd {
-	return doSearchFiltered(apiClient, query, "", gen, context.Background())
-}
+
 
 type SearchSuggestionsMsg struct {
 	Suggestions []ytmapi.SearchSuggestionItem
@@ -380,9 +373,7 @@ func hashString(s string) int {
 	return h
 }
 
-func fetchImage(url string) tea.Cmd {
-	return fetchImageSized(url, artWidth, artHeight)
-}
+
 
 func fetchImageSized(url string, width, height int) tea.Cmd {
 	return func() tea.Msg {
@@ -402,11 +393,4 @@ func debounceImagesRedraw() tea.Cmd {
 	})
 }
 
-// writeTTY writes a Kitty Graphics payload directly to /dev/tty,
-// bypassing BubbleTea's renderer which strips APC escape sequences.
-func writeTTY(k *KittyImage) tea.Cmd {
-	return func() tea.Msg {
-		_ = k.WriteToTTY()
-		return nil
-	}
-}
+

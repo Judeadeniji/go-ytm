@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -265,6 +266,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.enqueueVisibleImages(m.mainWidth())
 
 	case tea.KeyMsg:
+		if m.oauthState == 1 || m.oauthState == 2 {
+			switch msg.String() {
+			case "esc":
+				m.oauthState = 0
+				m.oauthInput.Blur()
+				m.setMainContent()
+				return m, nil
+			case "enter":
+				val := strings.TrimSpace(m.oauthInput.Value())
+				if m.oauthState == 1 {
+					if val != "" {
+						if strings.HasSuffix(val, ".json") {
+							// Simple heuristic: if it ends with .json, parse it.
+							// For real we'd os.ReadFile and json.Unmarshal. Let's do that.
+							if _, err := os.Stat(os.ExpandEnv(val)); err == nil {
+								// Parse {"installed": {"client_id": "...", "client_secret": "..."}}
+								// To avoid heavy imports, let's just do regex or basic struct.
+								// Actually better: just send a tea.Cmd that reads the file.
+								return m, m.parseClientSecretCmd(val)
+							}
+						}
+						m.oauthClientID = val
+					}
+					m.oauthState = 2
+					m.oauthInput.Reset()
+					m.oauthInput.Placeholder = "Client Secret"
+					m.setMainContent()
+					return m, nil
+				} else if m.oauthState == 2 {
+					m.oauthClientSecret = val
+					m.oauthState = 3
+					m.oauthInput.Blur()
+					m.statusMsg = "Requesting OAuth code..."
+					m.setMainContent()
+					return m, m.fetchOAuthCodeCmd()
+				}
+			}
+			var cmd tea.Cmd
+			m.oauthInput, cmd = m.oauthInput.Update(msg)
+			m.setMainContent()
+			return m, cmd
+		}
+
 		// If the search bar is focused, hijack keyboard events
 		if m.searchInput.Focused() {
 			switch msg.String() {
@@ -1359,6 +1403,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Successfully authenticated!"
 		m.setMainContent()
 		return m, nil
+
+	case clientSecretParsedMsg:
+		if msg.err != nil {
+			m.oauthState = 0
+			m.statusMsg = fmt.Sprintf("Error parsing client secret: %v", msg.err)
+			m.setMainContent()
+			return m, nil
+		}
+		m.oauthClientID = msg.clientID
+		m.oauthClientSecret = msg.clientSecret
+		m.oauthState = 3
+		m.oauthInput.Blur()
+		m.statusMsg = "Requesting OAuth code..."
+		m.setMainContent()
+		return m, m.fetchOAuthCodeCmd()
+
+	case oauthCodeMsg:
+		if msg.err != nil {
+			m.oauthState = 0
+			m.statusMsg = fmt.Sprintf("OAuth error: %v", msg.err)
+			m.setMainContent()
+			return m, nil
+		}
+		m.oauthCodeResp = msg.resp
+		m.statusMsg = "Waiting for browser authorization..."
+		m.setMainContent()
+		return m, m.pollOAuthTokenCmd(msg.resp.Interval)
+
+	case oauthTokenMsg:
+		if msg.err != nil {
+			m.oauthState = 0
+			m.statusMsg = fmt.Sprintf("OAuth token error: %v", msg.err)
+			m.setMainContent()
+			return m, nil
+		}
+		if msg.resp.Status == "pending" {
+			return m, m.pollOAuthTokenCmd(m.oauthCodeResp.Interval)
+		}
+		// Success!
+		m.oauthState = 0
+		m.statusMsg = "Successfully authenticated!"
+		m.oauthCodeResp = nil
+		m.setMainContent()
+		return m, nil
+
 	case imagesRedrawMsg:
 		m.imageDirty = false
 		m.setMainContent()
@@ -2226,4 +2315,68 @@ func (m *Model) openEditorForHeadersCmd() tea.Cmd {
 
 func explicitBadge() string {
 	return " 🅴"
+}
+
+type clientSecretParsedMsg struct {
+	clientID     string
+	clientSecret string
+	err          error
+}
+
+func (m *Model) parseClientSecretCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		path = strings.ReplaceAll(path, "~", os.Getenv("HOME"))
+		data, err := os.ReadFile(os.ExpandEnv(path))
+		if err != nil {
+			return clientSecretParsedMsg{err: err}
+		}
+		var parsed struct {
+			Installed struct {
+				ClientID     string `json:"client_id"`
+				ClientSecret string `json:"client_secret"`
+			} `json:"installed"`
+			Web struct {
+				ClientID     string `json:"client_id"`
+				ClientSecret string `json:"client_secret"`
+			} `json:"web"`
+		}
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			return clientSecretParsedMsg{err: err}
+		}
+		
+		clientID := parsed.Installed.ClientID
+		clientSecret := parsed.Installed.ClientSecret
+		if clientID == "" {
+			clientID = parsed.Web.ClientID
+			clientSecret = parsed.Web.ClientSecret
+		}
+		if clientID == "" {
+			return clientSecretParsedMsg{err: fmt.Errorf("client_id not found in JSON")}
+		}
+		return clientSecretParsedMsg{clientID: clientID, clientSecret: clientSecret}
+	}
+}
+
+type oauthCodeMsg struct {
+	resp *ytmapi.OAuthCodeResponse
+	err  error
+}
+
+func (m *Model) fetchOAuthCodeCmd() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.ytmapiClient.OAuthCode(context.Background(), m.oauthClientID, m.oauthClientSecret)
+		return oauthCodeMsg{resp: resp, err: err}
+	}
+}
+
+type oauthTokenMsg struct {
+	resp *ytmapi.OAuthTokenResponse
+	err  error
+}
+
+func (m *Model) pollOAuthTokenCmd(interval int) tea.Cmd {
+	return tea.Tick(time.Duration(interval)*time.Second, func(time.Time) tea.Msg {
+		resp, err := m.ytmapiClient.OAuthToken(context.Background(), m.oauthClientID, m.oauthClientSecret, m.oauthCodeResp.DeviceCode)
+		return oauthTokenMsg{resp: resp, err: err}
+	})
 }
