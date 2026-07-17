@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
@@ -60,6 +61,7 @@ func (m *Model) applyLayout() {
 }
 
 func (m Model) beginOpen(status string) Model {
+	slog.Info("navigating", "status", status)
 	m.cancelNavFetch()
 	m.navGen++
 	ctx, cancel := context.WithCancel(context.Background())
@@ -607,6 +609,8 @@ func (m Model) clickArtistZones(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 
 func (m Model) dispatchZone(zid, title, artist, thumb string) (Model, tea.Cmd, bool) {
 	switch {
+	case zid == "retry_page":
+		return m.retryCurrentPage()
 	case strings.HasPrefix(zid, "play_video_"):
 		id := strings.TrimPrefix(zid, "play_video_")
 		mm, cmd := m.playVideo(id, title, artist, thumb, true, "")
@@ -666,3 +670,49 @@ func fmtErr(err error) string {
 	}
 	return fmt.Sprintf("%v", err)
 }
+
+func (m Model) retryCurrentPage() (Model, tea.Cmd, bool) {
+	m.pageErr = ""
+	m.exploreErr = ""
+	m.pageLoading = true
+	m.exploreLoading = true
+	m.statusMsg = "Retrying..."
+	m.setMainContent()
+	m.navGen++
+	ctx := m.startNavCtx()
+
+	if m.activeMenu == "Explore" {
+		if m.exploreSubTab == "overview" {
+			return m, fetchExplore(m.ytmapiClient, m.navGen, ctx), true
+		}
+		if m.exploreSubTab == "moods" {
+			if m.activeMoodParams != "" {
+				return m, fetchMoodPlaylists(m.ytmapiClient, m.activeMoodParams, m.navGen, ctx), true
+			}
+			return m, fetchMoodCategories(m.ytmapiClient, m.navGen, ctx), true
+		}
+		if m.exploreSubTab == "charts" {
+			return m, fetchCharts(m.ytmapiClient, m.chartsCountry, m.navGen, ctx), true
+		}
+	}
+
+	if sc, ok := m.stack.Current(); ok {
+		switch sc.Kind {
+		case ScreenArtist:
+			return m, fetchArtist(m.ytmapiClient, sc.ID, m.navGen, ctx), true
+		case ScreenAlbum:
+			return m, fetchAlbum(m.ytmapiClient, sc.ID, m.navGen, ctx), true
+		case ScreenPlaylist:
+			return m, fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen, ctx), true
+		case ScreenSearch:
+			return m, doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen, ctx), true
+		}
+	}
+
+	if m.activeMenu == "Home" {
+		return m, fetchHome(m.ytmapiClient), true
+	}
+
+	return m, nil, false
+}
+
