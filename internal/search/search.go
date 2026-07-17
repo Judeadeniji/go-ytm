@@ -58,7 +58,7 @@ func NewExtractor() *Extractor {
 		client: &youtube.Client{
 			// Bound orphaned GetVideo work after ctx cancel (library ignores cancel).
 			HTTPClient: &http.Client{
-				Timeout:   18 * time.Second,
+				Timeout:   45 * time.Second,
 				Transport: &authRoundTripper{},
 			},
 		},

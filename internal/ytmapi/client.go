@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -17,14 +19,28 @@ const maxAPIBody = 8 << 20 // 8 MiB
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	token      string
 }
 
 func NewClient() *Client {
-	return &Client{
-		baseURL: "http://127.0.0.1:8000",
-		httpClient: &http.Client{
-			Timeout: 20 * time.Second,
+	socketPath := os.Getenv("YTM_API_SOCK")
+	if socketPath == "" {
+		socketPath = os.ExpandEnv("${HOME}/.local/state/go-ytm/ytm-api.sock")
+	}
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return net.Dial("unix", socketPath)
 		},
+	}
+
+	return &Client{
+		baseURL: "http://localhost",
+		httpClient: &http.Client{
+			Timeout:   45 * time.Second,
+			Transport: transport,
+		},
+		token: os.Getenv("YTM_API_TOKEN"),
 	}
 }
 
@@ -36,6 +52,9 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return fmt.Errorf("ytm-api request: %w", err)
+	}
+	if c.token != "" {
+		req.Header.Set("X-API-Token", c.token)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -346,6 +365,9 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 		return fmt.Errorf("ytm-api request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("X-API-Token", c.token)
+	}
 	
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -474,6 +496,14 @@ func (c *Client) OAuthToken(ctx context.Context, clientID, clientSecret, deviceC
 	req := OAuthTokenRequest{ClientID: clientID, ClientSecret: clientSecret, DeviceCode: deviceCode}
 	var data OAuthTokenResponse
 	if err := c.postJSON(ctx, "/auth/oauth/token", req, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+func (c *Client) GetProfile(ctx context.Context) (*UserProfile, error) {
+	var data UserProfile
+	if err := c.getJSON(ctx, "/auth/profile", &data); err != nil {
 		return nil, err
 	}
 	return &data, nil

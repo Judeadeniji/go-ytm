@@ -15,6 +15,11 @@ type NamedRef struct {
 	ID   string `json:"id,omitempty"`
 }
 
+type UserProfile struct {
+	Name  string `json:"name"`
+	Photo string `json:"photo"`
+}
+
 // SearchResult represents a generic item from ytmusicapi search.
 type SearchResult struct {
 	Category   string `json:"category"`

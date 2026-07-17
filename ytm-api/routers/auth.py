@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from ytmusicapi.setup import setup
 from ytmusicapi.auth.oauth import OAuthCredentials, RefreshingToken
 
-from deps import AUTH_FILE, reload_ytmusic
+from deps import AUTH_FILE, reload_ytmusic, ytmusic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,6 +32,7 @@ def auth_setup(req: AuthRequest):
         
         with open(AUTH_FILE, 'w') as f:
             json.dump(clean_headers, f, indent=4)
+        os.chmod(AUTH_FILE, 0o600)
             
         reload_ytmusic()
         return {"status": "ok"}
@@ -88,6 +89,32 @@ def oauth_token(req: OAuthTokenRequest):
 
     os.makedirs(os.path.dirname(AUTH_FILE), exist_ok=True)
     ref_token.local_cache = Path(AUTH_FILE)
+    if os.path.exists(AUTH_FILE):
+        os.chmod(AUTH_FILE, 0o600)
 
     reload_ytmusic()
     return {"status": "ok"}
+
+
+@router.get("/profile")
+def get_profile():
+    """Get the current authenticated user's profile."""
+    if not os.path.exists(AUTH_FILE):
+        return {"name": "", "photo": ""}
+        
+    try:
+        res = ytmusic._send_request("account/account_menu", {})
+        actions = res.get("actions", [])
+        if actions:
+            renderer = actions[0].get("openPopupAction", {}).get("popup", {}).get("multiPageMenuRenderer", {}).get("header", {}).get("activeAccountHeaderRenderer", {})
+            runs = renderer.get("accountName", {}).get("runs", [])
+            name = runs[0].get("text", "") if runs else ""
+            
+            thumbnails = renderer.get("accountPhoto", {}).get("thumbnails", [])
+            photo = thumbnails[0].get("url", "") if thumbnails else ""
+            
+            return {"name": name, "photo": photo}
+    except Exception:
+        pass
+        
+    return {"name": "", "photo": ""}
