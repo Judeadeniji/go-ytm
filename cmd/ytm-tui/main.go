@@ -26,13 +26,20 @@ func init() {
 }
 
 func main() {
-	stateDir := os.ExpandEnv("$HOME/.local/state/go-ytm")
-	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating state dir: %v\n", err)
-		os.Exit(1)
+	var logPath string
+	if os.Getenv("YTM_DEV") == "1" {
+		os.MkdirAll("tmp", 0700)
+		logPath = "tmp/ytm-tui.log"
+	} else {
+		stateDir := os.ExpandEnv("$HOME/.local/state/go-ytm")
+		if err := os.MkdirAll(stateDir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating state dir: %v\n", err)
+			os.Exit(1)
+		}
+		logPath = filepath.Join(stateDir, "tui.log")
 	}
-	
-	f, err := tea.LogToFile(filepath.Join(stateDir, "tui.log"), "tui")
+
+	f, err := tea.LogToFile(logPath, "tui")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
 		os.Exit(1)

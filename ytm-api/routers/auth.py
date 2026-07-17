@@ -20,8 +20,19 @@ class AuthRequest(BaseModel):
 def auth_setup(req: AuthRequest):
     """Configure authentication from raw browser headers."""
     try:
+        import json
         os.makedirs(os.path.dirname(AUTH_FILE), exist_ok=True)
         setup(filepath=AUTH_FILE, headers_raw=req.headers_raw)
+        
+        # Sanitize headers (remove HTTP request lines from copy/paste)
+        with open(AUTH_FILE, 'r') as f:
+            headers = json.load(f)
+        
+        clean_headers = {k: v for k, v in headers.items() if " " not in k and not k.startswith("GET") and not k.startswith("POST")}
+        
+        with open(AUTH_FILE, 'w') as f:
+            json.dump(clean_headers, f, indent=4)
+            
         reload_ytmusic()
         return {"status": "ok"}
     except Exception as exc:

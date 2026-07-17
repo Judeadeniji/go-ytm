@@ -14,6 +14,8 @@ API_PIDFILE="$ROOT/tmp/ytm-api.pid"
 API_PID=""
 STARTED_API=0
 
+export YTM_DEV=1
+
 # Prefer a real system interpreter. Some IDE shells hijack bare `python3`
 # into an AppImage; always use an absolute path when possible.
 if [[ -x /usr/bin/python3.14 ]]; then
