@@ -1516,7 +1516,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Ignore pure motion events unless we are actively scrubbing
-		if mouseMsg.Action == tea.MouseActionMotion && !m.scrubbing {
+		isMotion := mouseMsg.Action == tea.MouseActionMotion || mouseMsg.Type == tea.MouseMotion || mouseMsg.Type == tea.MouseUnknown
+		if isMotion && !m.scrubbing {
 			return m, nil
 		}
 
