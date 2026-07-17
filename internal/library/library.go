@@ -527,3 +527,105 @@ VALUES (?, ?, ?, ?)`, i, n.Kind, n.ID, n.Title); err != nil {
 
 	return tx.Commit()
 }
+
+// CachedTrack represents a downloaded offline track
+type CachedTrack struct {
+	VideoID  string
+	Path     string
+	Bytes    int64
+	Title    string
+	Artist   string
+	Album    string
+	Duration string
+}
+
+// GetDownloads fetches all cached tracks.
+func (db *DB) GetDownloads() ([]CachedTrack, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.sql.Query(`SELECT video_id, path, bytes, title, artist, album, duration FROM download_cache ORDER BY cached_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tracks []CachedTrack
+	for rows.Next() {
+		var t CachedTrack
+		if err := rows.Scan(&t.VideoID, &t.Path, &t.Bytes, &t.Title, &t.Artist, &t.Album, &t.Duration); err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, t)
+	}
+	return tracks, rows.Err()
+}
+
+// AddDownload inserts or updates a cached track.
+func (db *DB) AddDownload(t CachedTrack) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	_, err := db.sql.Exec(`INSERT INTO download_cache (video_id, path, bytes, title, artist, album, duration, cached_at) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(video_id) DO UPDATE SET 
+		path=excluded.path, bytes=excluded.bytes, 
+		title=excluded.title, artist=excluded.artist, 
+		album=excluded.album, duration=excluded.duration,
+		cached_at=datetime('now')`,
+		t.VideoID, t.Path, t.Bytes, t.Title, t.Artist, t.Album, t.Duration)
+	return err
+}
+
+// RemoveDownload removes a track from the cache database.
+func (db *DB) RemoveDownload(videoID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	_, err := db.sql.Exec(`DELETE FROM download_cache WHERE video_id = ?`, videoID)
+	return err
+}
+
+// CachedLyrics represents offline lyrics
+type CachedLyrics struct {
+	Instrumental bool
+	Plain        string
+	Synced       string
+}
+
+// SaveLyricsCache saves lyrics to the local DB.
+func (db *DB) SaveLyricsCache(videoID string, lyrics CachedLyrics) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	inst := 0
+	if lyrics.Instrumental {
+		inst = 1
+	}
+
+	_, err := db.sql.Exec(`INSERT INTO lyrics_cache (video_id, instrumental, plain_lyrics, synced_lyrics, cached_at)
+		VALUES (?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(video_id) DO UPDATE SET
+		instrumental=excluded.instrumental, plain_lyrics=excluded.plain_lyrics, synced_lyrics=excluded.synced_lyrics, cached_at=datetime('now')`,
+		videoID, inst, lyrics.Plain, lyrics.Synced)
+	return err
+}
+
+// GetLyricsCache retrieves lyrics from local DB for offline playback.
+func (db *DB) GetLyricsCache(videoID string) (*CachedLyrics, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	row := db.sql.QueryRow(`SELECT instrumental, plain_lyrics, synced_lyrics FROM lyrics_cache WHERE video_id = ?`, videoID)
+	var c CachedLyrics
+	var inst int
+	err := row.Scan(&inst, &c.Plain, &c.Synced)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // No cache
+		}
+		return nil, err
+	}
+	c.Instrumental = inst == 1
+	return &c, nil
+}

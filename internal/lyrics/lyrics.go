@@ -43,6 +43,7 @@ type Result struct {
 type Lyrics struct {
 	Instrumental bool
 	Plain        string
+	RawSynced    string
 	Lines        []Line
 	SourceID     int
 }
@@ -146,6 +147,7 @@ func resultToLyrics(r Result) *Lyrics {
 		SourceID:     r.ID,
 	}
 	if synced := strings.TrimSpace(r.SyncedLyrics); synced != "" {
+		out.RawSynced = synced
 		out.Lines = ParseLRC(synced)
 	}
 	if out.Plain == "" && len(out.Lines) > 0 {
