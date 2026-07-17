@@ -497,12 +497,12 @@ func (m Model) renderMixCarousel(index int, title string, cards []ytmapi.HomeCar
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC")).Background(bg).Render(s),
 		)
 
-		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
-			content = m.zone.Mark(zid, content)
-		}
-
 		style := lipgloss.NewStyle().Padding(1, 2).Width(cardWidth).Background(bg).MarginRight(2)
-		blocks = append(blocks, style.Render(content))
+		styledContent := style.Render(content)
+		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
+			styledContent = m.zone.Mark(zid, styledContent)
+		}
+		blocks = append(blocks, styledContent)
 	}
 
 	row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
@@ -595,12 +595,12 @@ func (m Model) renderQuickPicksCarousel(index int, title string, cards []ytmapi.
 			art, textStyle.Render(textContent),
 		)
 
-		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
-			content = m.zone.Mark(zid, content)
-		}
-
 		style := lipgloss.NewStyle().Padding(1, 2).Width(cardWidth).Background(bg).MarginRight(2)
-		blocks = append(blocks, style.Render(content))
+		styledContent := style.Render(content)
+		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
+			styledContent = m.zone.Mark(zid, styledContent)
+		}
+		blocks = append(blocks, styledContent)
 	}
 
 	row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
