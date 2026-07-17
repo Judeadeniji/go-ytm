@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -47,8 +50,9 @@ type Model struct {
 	suggestionGen     int // bumps on each query change; ignores stale fetches
 	sugCancel         context.CancelFunc
 	zone              *zone.Manager
-
-	oauthState        int // 0: None, 1: Entering Client ID, 2: Entering Client Secret, 3: Waiting
+	
+	authState         int // 0: None, 1: Connecting
+	oauthState        int // 0: None, 1: Entering Client ID/Path, 2: Entering Client Secret, 3: Waiting
 	settingsTab       string
 	settingsRow       int // focused row index in the current settings tab
 	oauthInput        textinput.Model
@@ -178,7 +182,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 	ti.Width = 56 // Leave room for padding
 
 	oti := textinput.New()
-	oti.Placeholder = "Client ID"
+	oti.Placeholder = "Path to client_secret.json (or raw Client ID)"
 	oti.PlaceholderStyle = lipgloss.NewStyle().Foreground(colorSubtext)
 	oti.TextStyle = lipgloss.NewStyle().Foreground(colorText)
 	oti.Cursor.Style = lipgloss.NewStyle().Foreground(colorText)
@@ -261,39 +265,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.enqueueVisibleImages(m.mainWidth())
 
 	case tea.KeyMsg:
-		if m.oauthState == 1 || m.oauthState == 2 {
-			switch msg.String() {
-			case "esc":
-				m.oauthState = 0
-				m.oauthInput.Blur()
-				m.setMainContent()
-				return m, nil
-			case "enter":
-				val := strings.TrimSpace(m.oauthInput.Value())
-				if m.oauthState == 1 {
-					if val != "" {
-						m.oauthClientID = val
-					}
-					m.oauthState = 2
-					m.oauthInput.Reset()
-					m.oauthInput.Placeholder = "Client Secret (optional)"
-					m.setMainContent()
-					return m, nil
-				} else if m.oauthState == 2 {
-					m.oauthClientSecret = val
-					m.oauthState = 3
-					m.oauthInput.Blur()
-					m.statusMsg = "Requesting OAuth code..."
-					m.setMainContent()
-					return m, m.fetchOAuthCodeCmd()
-				}
-			}
-			var cmd tea.Cmd
-			m.oauthInput, cmd = m.oauthInput.Update(msg)
-			m.setMainContent()
-			return m, cmd
-		}
-
 		// If the search bar is focused, hijack keyboard events
 		if m.searchInput.Focused() {
 			switch msg.String() {
@@ -302,14 +273,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return mm, cmd
 			case "esc":
 				m.searchInput.Blur()
-				return m, nil
-			case "up":
-				m = m.moveSuggestionFocus(-1)
+				m.searchSuggestions = nil
+				m.setMainContent()
 				return m, nil
 			case "down":
 				m = m.moveSuggestionFocus(1)
 				return m, nil
+			case "up":
+				m = m.moveSuggestionFocus(-1)
+				return m, nil
 			}
+
 			var cmd tea.Cmd
 			oldVal := m.searchInput.Value()
 			m.searchInput, cmd = m.searchInput.Update(msg)
@@ -325,11 +299,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(cmd, debounceSuggestions(newVal, m.suggestionGen))
 			}
+			m.setMainContent()
 			return m, cmd
 		}
 
 		// Settings page keyboard nav (intercept before global keys)
-		if m.activeMenu == "Settings" && !m.nowPlayingOpen && m.oauthState == 0 {
+		if m.activeMenu == "Settings" && !m.nowPlayingOpen {
 			if mm, cmd, handled := m.HandleSettingsKey(msg.String()); handled {
 				return mm, cmd
 			}
@@ -1362,32 +1337,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case oauthCodeMsg:
-		if msg.err != nil {
-			m.oauthState = 0
-			m.statusMsg = fmt.Sprintf("OAuth error: %v", msg.err)
-			m.setMainContent()
-			return m, nil
-		}
-		m.oauthCodeResp = msg.resp
-		m.statusMsg = "Waiting for browser authorization..."
+	case authHeadersReadyMsg:
+		m.statusMsg = "Authenticating with headers..."
 		m.setMainContent()
-		return m, m.pollOAuthTokenCmd(msg.resp.Interval)
+		return m, func() tea.Msg {
+			err := m.ytmapiClient.AuthSetup(context.Background(), msg.headers)
+			if err != nil {
+				return authErrorMsg{err: err}
+			}
+			return authSuccessMsg{}
+		}
 
-	case oauthTokenMsg:
-		if msg.err != nil {
-			m.oauthState = 0
-			m.statusMsg = fmt.Sprintf("OAuth token error: %v", msg.err)
-			m.setMainContent()
-			return m, nil
-		}
-		if msg.resp.Status == "pending" {
-			return m, m.pollOAuthTokenCmd(m.oauthCodeResp.Interval)
-		}
-		// Success!
-		m.oauthState = 0
+	case authErrorMsg:
+		m.authState = 0
+		m.statusMsg = fmt.Sprintf("Auth error: %v", msg.err)
+		m.setMainContent()
+		return m, nil
+
+	case authSuccessMsg:
+		m.authState = 0
 		m.statusMsg = "Successfully authenticated!"
-		m.oauthCodeResp = nil
 		m.setMainContent()
 		return m, nil
 	case imagesRedrawMsg:
@@ -1435,7 +1404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return mm, cmd
 		}
 
-		if m.searchInput.Focused() && mouseMsg.Type == tea.MouseLeft {
+		if m.searchInput.Focused() && mouseMsg.Button == tea.MouseButtonLeft && mouseMsg.Action == tea.MouseActionPress {
 			for i := range m.searchSuggestions {
 				if m.zone.Get(fmt.Sprintf("suggestion_%d", i)).InBounds(mouseMsg) {
 					m.listCursor = i
@@ -1444,7 +1413,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if mouseMsg.Type == tea.MouseLeft || (mouseMsg.Button == tea.MouseButtonLeft && mouseMsg.Action == tea.MouseActionPress) {
+		if mouseMsg.Button == tea.MouseButtonLeft && mouseMsg.Action == tea.MouseActionPress {
 			if mm, cmd, handled := m.handleLyricsClick(mouseMsg); handled {
 				return mm, cmd
 			}
@@ -1497,20 +1466,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.chartsLoading = true
 							cmd = fetchCharts(m.ytmapiClient, "", m.navGen, m.navCtx)
 						}
+						if cmd == nil {
+							cmd = m.enqueueVisibleImages(m.mainWidth())
+						} else {
+							cmd = tea.Batch(cmd, m.enqueueVisibleImages(m.mainWidth()))
+						}
 						return m, cmd
 					}
 				}
 				if m.exploreSubTab == "moods" {
 					if m.zone.Get("mood_back").InBounds(mouseMsg) {
 						m.activeMoodParams = ""
+						m.moodPlaylists = nil
 						m.setMainContent()
-						return m, nil
+						return m, m.enqueueVisibleImages(m.mainWidth())
 					}
 					if m.moodCategories != nil && m.activeMoodParams == "" {
 						for _, categories := range m.moodCategories {
 							for _, cat := range categories {
-								if m.zone.Get("mood_" + cat.Params).InBounds(mouseMsg) {
+								if m.zone.Get("mood_"+cat.Params).InBounds(mouseMsg) {
 									m.activeMoodParams = cat.Params
+									m.moodPlaylists = nil
 									m.exploreLoading = true
 									m.setMainContent()
 									return m, fetchMoodPlaylists(m.ytmapiClient, cat.Params, m.navGen, m.navCtx)
@@ -1534,11 +1510,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// ── Account tab ─────────────────────────────────────────────
 				if m.zone.Get("settings_oauth").InBounds(mouseMsg) {
 					m.oauthState = 1
-					m.oauthInput.Placeholder = "Client ID"
+					m.oauthInput.Placeholder = "Path to client_secret.json (or raw Client ID)"
 					m.oauthInput.Reset()
 					m.oauthInput.Focus()
 					m.setMainContent()
 					return m, textinput.Blink
+				}
+				if m.zone.Get("settings_auth_headers").InBounds(mouseMsg) {
+					m.authState = 1
+					m.setMainContent()
+					return m, m.openEditorForHeadersCmd()
 				}
 				if m.zone.Get("settings_toggle_queue").InBounds(mouseMsg) {
 					m.queuePanelHidden = !m.queuePanelHidden
@@ -2025,15 +2006,16 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 				}
 				cIdx++
 			}
-		} else if m.exploreSubTab == "moodPlaylists" && m.moodPlaylists != nil {
+		} else if m.exploreSubTab == "moods" && m.activeMoodParams != "" && m.moodPlaylists != nil {
+			const thumbW, thumbH = 8, 4
 			for i, p := range m.moodPlaylists {
 				if i >= 30 {
-					break // max visible playlists in grid
+					break
 				}
 				if thumbs, ok := p["thumbnails"].([]any); ok && len(thumbs) > 0 {
 					if thumbMap, ok := thumbs[0].(map[string]any); ok {
 						if url, ok := thumbMap["url"].(string); ok && url != "" {
-							queue(url, 8, 4)
+							queue(url, thumbW, thumbH)
 						}
 					}
 				}
@@ -2051,6 +2033,18 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 				if i >= 6 { break }
 				if len(v.Thumbnails) > 0 {
 					queue(v.Thumbnails[0].URL, cardW-2, 6)
+				}
+			}
+			for i, v := range m.chartsData.Daily {
+				if i >= 10 { break }
+				if len(v.Thumbnails) > 0 {
+					queue(v.Thumbnails[0].URL, 8, 4)
+				}
+			}
+			for i, v := range m.chartsData.Weekly {
+				if i >= 10 { break }
+				if len(v.Thumbnails) > 0 {
+					queue(v.Thumbnails[0].URL, 8, 4)
 				}
 			}
 		}
@@ -2194,35 +2188,40 @@ func (m *Model) putImageCache(key string, img *KittyImage) {
 	m.imageCacheOrder = append(m.imageCacheOrder, key)
 }
 
-type oauthCodeMsg struct {
-	resp *ytmapi.OAuthCodeResponse
-	err  error
+type authHeadersReadyMsg struct {
+	headers string
 }
 
-func (m *Model) fetchOAuthCodeCmd() tea.Cmd {
+type authSuccessMsg struct{}
+type authErrorMsg struct {
+	err error
+}
+
+func (m *Model) openEditorForHeadersCmd() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := m.ytmapiClient.OAuthCode(context.Background(), m.oauthClientID, m.oauthClientSecret)
-		return oauthCodeMsg{resp: resp, err: err}
+		filePath := os.ExpandEnv("$HOME/.local/state/go-ytm/headers.txt")
+		os.MkdirAll(filepath.Dir(filePath), 0700)
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			os.WriteFile(filePath, []byte("# Paste your request headers from music.youtube.com here\n# (e.g. from Firefox Network tab -> right click a request -> Copy -> Copy Request Headers)\n# Save and exit to continue.\n\n"), 0600)
+		}
+
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "nano"
+		}
+		cmd := exec.Command(editor, filePath)
+		return tea.ExecProcess(cmd, func(err error) tea.Msg {
+			if err != nil {
+				return authErrorMsg{err: err}
+			}
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return authErrorMsg{err: err}
+			}
+			os.Remove(filePath)
+			return authHeadersReadyMsg{headers: string(data)}
+		})()
 	}
-}
-
-type oauthTokenMsg struct {
-	resp *ytmapi.OAuthTokenResponse
-	err  error
-}
-
-func (m *Model) fetchOAuthTokenCmd() tea.Cmd {
-	return func() tea.Msg {
-		resp, err := m.ytmapiClient.OAuthToken(context.Background(), m.oauthClientID, m.oauthClientSecret, m.oauthCodeResp.DeviceCode)
-		return oauthTokenMsg{resp: resp, err: err}
-	}
-}
-
-func (m *Model) pollOAuthTokenCmd(interval int) tea.Cmd {
-	return tea.Tick(time.Duration(interval)*time.Second, func(time.Time) tea.Msg {
-		resp, err := m.ytmapiClient.OAuthToken(context.Background(), m.oauthClientID, m.oauthClientSecret, m.oauthCodeResp.DeviceCode)
-		return oauthTokenMsg{resp: resp, err: err}
-	})
 }
 
 func explicitBadge() string {

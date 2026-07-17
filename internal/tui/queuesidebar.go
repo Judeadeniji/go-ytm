@@ -575,7 +575,7 @@ func (m Model) cycleRailTab(delta int) (Model, tea.Cmd) {
 
 // handleRailPanelClick handles tab switches and Details inspector actions.
 func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
-	if msg.Type != tea.MouseLeft || !m.showQueuePanel() {
+	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress || !m.showQueuePanel() {
 		return m, nil, false
 	}
 

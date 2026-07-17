@@ -387,9 +387,8 @@ func (m Model) handleLyricsClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	if !m.nowPlayingOpen || len(m.lyricsLines) == 0 {
 		return m, nil, false
 	}
-	// Fire on press (or legacy MouseLeft) — not on release, to avoid doubles.
-	press := msg.Action == tea.MouseActionPress ||
-		(msg.Type == tea.MouseLeft && msg.Action != tea.MouseActionRelease && msg.Action != tea.MouseActionMotion)
+	// Fire on left-button press only — not on release or motion.
+	press := msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress
 	if !press {
 		return m, nil, false
 	}

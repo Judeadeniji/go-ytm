@@ -199,6 +199,13 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 			m.setMainContent()
 			return m, true
 		}
+		// moods playlist grid: up/down scrolls rows (2 playlists per row)
+		if m.exploreSubTab == "moods" && m.activeMoodParams != "" && len(m.moodPlaylists) > 0 {
+			rows := (len(m.moodPlaylists) + 1) / 2
+			m.listCursor = clampIndex(m.listCursor+delta, rows)
+			m.setMainContent()
+			return m, true
+		}
 		return m, false
 	}
 
@@ -424,6 +431,31 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 		}
 		mm, cmd, _ := m.dispatchZone(zid, card.Title, artist, thumb)
 		return mm, cmd
+
+	case screenExplore:
+		if m.exploreSubTab == "moods" && m.activeMoodParams != "" && len(m.moodPlaylists) > 0 {
+			// listCursor is the row index; within a row the left cell (col 0) is focused
+			row := m.listCursor
+			idx := row * 2 // left cell of that row
+			if idx < 0 || idx >= len(m.moodPlaylists) {
+				return m, nil
+			}
+			p := m.moodPlaylists[idx]
+			pid := mapStr(p, "playlistId")
+			if pid == "" {
+				return m, nil
+			}
+			title := mapStr(p, "title")
+			thumb := ""
+			if thumbs, ok := p["thumbnails"].([]any); ok && len(thumbs) > 0 {
+				if t, ok := thumbs[0].(map[string]any); ok {
+					thumb, _ = t["url"].(string)
+				}
+			}
+			mm, cmd, _ := m.dispatchZone("open_playlist_"+pid, title, "", thumb)
+			return mm, cmd
+		}
+		return m, nil
 	}
 
 	return m, nil

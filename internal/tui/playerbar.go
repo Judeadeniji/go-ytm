@@ -283,8 +283,7 @@ func (m Model) handleProgressScrub(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	z := m.zone.Get("player_progress")
 
 	switch {
-	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft,
-		msg.Type == tea.MouseLeft && msg.Action == tea.MouseActionPress:
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
 		if z.IsZero() || !z.InBounds(msg) {
 			return m, nil, false
 		}

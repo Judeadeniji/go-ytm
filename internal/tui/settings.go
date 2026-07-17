@@ -47,7 +47,7 @@ func (m Model) settingsItemsForTab(tabID string) []settingsItem {
 	switch tabID {
 	case "account":
 		return []settingsItem{
-			{kindAction, "Sign in to YouTube Music", "Connect your Google account via OAuth device flow", "settings_oauth", "account"},
+			{kindAction, "Sign in to YouTube Music", "Connect your Google account using browser headers", "settings_auth_headers", "account"},
 			{kindToggle, "Send listening history", "Allow YouTube Music to personalise recommendations", "settings_history", "account"},
 		}
 	case "playback":
@@ -222,12 +222,9 @@ func (m Model) HandleSettingsKey(key string) (Model, tea.Cmd, bool) {
 func (m Model) settingsActivate(it settingsItem) (Model, tea.Cmd) {
 	switch it.ZoneID {
 	// account
-	case "settings_oauth":
-		m.oauthState = 1
-		m.oauthInput.Placeholder = "Client ID"
-		m.oauthInput.Reset()
-		m.oauthInput.Focus()
-		return m, nil // Blink already in effect from Focus
+	case "settings_auth_headers":
+		m.authState = 1
+		return m, m.openEditorForHeadersCmd() // Blink already in effect from Focus
 	case "settings_history":
 		m.statusMsg = "Listening history toggle (coming soon)"
 		return m, nil
@@ -585,7 +582,7 @@ func (m Model) settingsRowVal(it settingsItem) string {
 		return fmt.Sprintf("%+.1f st", m.pitch)
 
 	// actions
-	case "settings_oauth":
+	case "settings_auth_headers":
 		return ""
 	case "settings_tempo_reset", "settings_open_downloads",
 		"settings_cache_size", "settings_clear_cache", "settings_clear_session":
@@ -602,9 +599,9 @@ func (m Model) renderSettingsAccount(w int, items []settingsItem) string {
 	var sb strings.Builder
 	sb.WriteString(settingsSectionHeader("Account"))
 
-	// OAuth state machine card (replaces the normal row when active)
-	if m.oauthState > 0 {
-		sb.WriteString(settingsCard(w, m.renderOAuthFlow()))
+	// Auth state machine card (replaces the normal row when active)
+	if m.authState > 0 {
+		sb.WriteString(settingsCard(w, m.renderAuthFlow()))
 	} else {
 		rows := m.renderItemGroup(items, []int{0}, w)
 		sb.WriteString(settingsCard(w, rows))
@@ -615,41 +612,15 @@ func (m Model) renderSettingsAccount(w int, items []settingsItem) string {
 	sb.WriteString(settingsCard(w, rows))
 
 	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).
-		Render("Press Enter on 'Sign in' to start the browser OAuth flow."))
+		Render("Press Enter on 'Sign in' to open your editor and paste browser headers."))
 	return sb.String()
 }
 
-func (m Model) renderOAuthFlow() string {
-	switch {
-	case m.oauthState == 1:
+func (m Model) renderAuthFlow() string {
+	if m.authState == 1 {
 		return lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Step 1 / 2 — Google OAuth Client ID"),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render("Create credentials at console.cloud.google.com"),
-			"",
-			m.oauthInput.View(),
-			"",
-			lipgloss.NewStyle().Foreground(colorDivider).Render("Enter to continue  ·  Esc to cancel"),
-		)
-	case m.oauthState == 2:
-		return lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Step 2 / 2 — Client Secret"),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render("Found in the same credentials screen"),
-			"",
-			m.oauthInput.View(),
-			"",
-			lipgloss.NewStyle().Foreground(colorDivider).Render("Enter to continue  ·  Esc to cancel"),
-		)
-	case m.oauthState == 3 && m.oauthCodeResp != nil:
-		codeStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).
-			Background(colorFocusBg).Padding(0, 2)
-		return lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Open this URL in your browser:"),
-			lipgloss.NewStyle().Foreground(colorSubtext).Render(m.oauthCodeResp.VerificationURL),
-			"",
-			lipgloss.NewStyle().Foreground(colorSubtext).Render("Enter this code:"),
-			codeStyle.Render("  "+m.oauthCodeResp.UserCode+"  "),
-			"",
-			lipgloss.NewStyle().Foreground(colorDivider).Render("Waiting for browser authorisation…"),
+			lipgloss.NewStyle().Foreground(colorText).Bold(true).Render("Connecting to YouTube Music…"),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render("Please complete sign-in in your text editor."),
 		)
 	}
 	return lipgloss.NewStyle().Foreground(colorSubtext).Render("Authorising…")
