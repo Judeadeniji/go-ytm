@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	runewidth "github.com/mattn/go-runewidth"
@@ -24,6 +26,19 @@ func init() {
 }
 
 func main() {
+	stateDir := os.ExpandEnv("$HOME/.local/state/go-ytm")
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating state dir: %v\n", err)
+		os.Exit(1)
+	}
+	
+	f, err := tea.LogToFile(filepath.Join(stateDir, "tui.log"), "tui")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer f.Close()
+	log.Printf("Starting go-ytm TUI...")
 	p, err := player.NewPlayer()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting MPV player: %v\n", err)
