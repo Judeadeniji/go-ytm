@@ -5,16 +5,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${1:-$ROOT/bin/ytm-tui}"
-API_HOST="127.0.0.1"
-API_PORT="${YTM_API_PORT:-8000}"
-API_URL="http://${API_HOST}:${API_PORT}"
 VENV="$ROOT/ytm-api/venv"
+API_SOCK="$ROOT/tmp/ytm-api.sock"
 API_LOG="$ROOT/tmp/ytm-api.log"
 API_PIDFILE="$ROOT/tmp/ytm-api.pid"
 API_PID=""
 STARTED_API=0
 
 export YTM_DEV=1
+
+if [[ -z "${YTM_API_TOKEN:-}" ]]; then
+	export YTM_API_TOKEN="$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32 || true)"
+fi
 
 # Prefer a real system interpreter. Some IDE shells hijack bare `python3`
 # into an AppImage; always use an absolute path when possible.
@@ -57,7 +59,7 @@ require_cmd() {
 }
 
 api_ready() {
-	curl -sf "${API_URL}/health" >/dev/null 2>&1
+	curl -sf --unix-socket "$API_SOCK" "http://localhost/health" >/dev/null 2>&1
 }
 
 # True when venv has a real interpreter (not an AppImage) and uvicorn installed.
@@ -121,7 +123,7 @@ ensure_venv
 mkdir -p "$ROOT/tmp"
 
 if api_ready; then
-	echo "==> ytm-api already running at ${API_URL}"
+	echo "==> ytm-api already running on ${API_SOCK}"
 else
 	if [[ -f "$API_PIDFILE" ]]; then
 		old_pid="$(cat "$API_PIDFILE" 2>/dev/null || true)"
@@ -132,16 +134,19 @@ else
 		rm -f "$API_PIDFILE"
 	fi
 
-	echo "==> Starting ytm-api on ${API_URL}..."
+	echo "==> Starting ytm-api on ${API_SOCK}..."
 	(
 		cd "$ROOT/ytm-api"
+		# Remove old socket before starting to avoid conflicts
+		rm -f "$API_SOCK"
 		exec env -i \
 			PATH="$VENV/bin:/usr/bin:/bin" \
 			HOME="${HOME:-/tmp}" \
 			TERM="${TERM:-xterm}" \
 			LANG="${LANG:-C.UTF-8}" \
 			VIRTUAL_ENV="$VENV" \
-			"$VENV/bin/uvicorn" main:app --host "$API_HOST" --port "$API_PORT"
+			YTM_API_TOKEN="$YTM_API_TOKEN" \
+			"$VENV/bin/uvicorn" main:app --uds "$API_SOCK"
 	) >>"$API_LOG" 2>&1 &
 	API_PID=$!
 	echo "$API_PID" >"$API_PIDFILE"
@@ -165,4 +170,4 @@ else
 fi
 
 echo "==> Starting ${BIN##*/} (mpv via Go IPC)..."
-"$BIN"
+YTM_API_SOCK="$API_SOCK" "$BIN"
