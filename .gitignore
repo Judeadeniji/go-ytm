@@ -1,5 +1,6 @@
 # Binaries
 /bin/
+/ytm
 /ytm-tui
 *.exe
 *.exe~
@@ -16,6 +17,7 @@
 # Local runtime
 /tmp/
 /ytm-api/venv/
+.release-api/
 
 .build_assets/
 
@@ -26,6 +28,5 @@
 .idea/
 .vscode/
 *.swp
-
 
 __pycache__/
