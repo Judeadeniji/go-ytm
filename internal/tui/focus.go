@@ -15,6 +15,7 @@ const (
 	screenAlbum
 	screenPlaylist
 	screenExplore
+	screenLibrary
 	screenOther
 )
 
@@ -39,6 +40,9 @@ func (m Model) currentScreen() screenKind {
 	}
 	if m.activeMenu == "Explore" {
 		return screenExplore
+	}
+	if m.activeMenu == "Library" {
+		return screenLibrary
 	}
 	return screenOther
 }
@@ -207,6 +211,51 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 			return m, true
 		}
 		return m, false
+
+	case screenLibrary:
+		switch m.libraryTab {
+		case "playlists":
+			if len(m.libPlaylists) == 0 {
+				return m, false
+			}
+			m.listCursor = clampIndex(m.listCursor+delta, len(m.libPlaylists))
+			m.ensureListCursorInViewGrid(m.listCursor, (m.mainWidth()-2)/(artWidth+2), artHeight+4)
+			m.setMainContent()
+			return m, true
+		case "albums":
+			if len(m.libAlbums) == 0 {
+				return m, false
+			}
+			m.listCursor = clampIndex(m.listCursor+delta, len(m.libAlbums))
+			m.ensureListCursorInViewGrid(m.listCursor, (m.mainWidth()-2)/(artWidth+2), artHeight+4)
+			m.setMainContent()
+			return m, true
+		case "artists":
+			if len(m.libArtists) == 0 {
+				return m, false
+			}
+			m.listCursor = clampIndex(m.listCursor+delta, len(m.libArtists))
+			m.ensureListCursorInViewGrid(m.listCursor, (m.mainWidth()-2)/(artWidth+2), artHeight+4)
+			m.setMainContent()
+			return m, true
+		case "songs":
+			if len(m.libSongs) == 0 {
+				return m, false
+			}
+			m.listCursor = clampIndex(m.listCursor+delta, len(m.libSongs))
+			m.ensureListCursorInView(3, 3)
+			m.setMainContent()
+			return m, true
+		case "downloads":
+			if len(m.libDownloads) == 0 {
+				return m, false
+			}
+			m.listCursor = clampIndex(m.listCursor+delta, len(m.libDownloads))
+			m.ensureListCursorInView(3, 3)
+			m.setMainContent()
+			return m, true
+		}
+		return m, false
 	}
 
 	return m, false
@@ -247,6 +296,7 @@ func (m *Model) moveHomeCard(delta int) (tea.Model, tea.Cmd) {
 		if len(cars) == 0 {
 			return *m, nil
 		}
+		m.activeCarousel = clampIndex(m.activeCarousel, len(cars))
 		car := cars[m.activeCarousel]
 		if len(car.Contents) == 0 {
 			return *m, nil
@@ -256,10 +306,29 @@ func (m *Model) moveHomeCard(delta int) (tea.Model, tea.Cmd) {
 		m.setMainContent()
 		return *m, m.enqueueVisibleImages(m.mainWidth())
 	}
+	if m.currentScreen() == screenLibrary {
+		var count int
+		switch m.libraryTab {
+		case "playlists":
+			count = len(m.libPlaylists)
+		case "albums":
+			count = len(m.libAlbums)
+		case "artists":
+			count = len(m.libArtists)
+		}
+		if count == 0 {
+			return *m, nil
+		}
+		m.homeCardCursor = clampIndex(m.homeCardCursor+delta, count)
+		m.ensureHomeCardVisible()
+		m.setMainContent()
+		return *m, m.enqueueVisibleImages(m.mainWidth())
+	}
 
 	if !m.onHomeScreen() || len(m.homeCarousels) == 0 {
 		return *m, nil
 	}
+	m.activeCarousel = clampIndex(m.activeCarousel, len(m.homeCarousels))
 	car := m.homeCarousels[m.activeCarousel]
 	if len(car.Contents) == 0 {
 		return *m, nil
@@ -273,11 +342,22 @@ func (m *Model) moveHomeCard(delta int) (tea.Model, tea.Cmd) {
 func (m *Model) ensureHomeCardVisible() {
 	var title string
 	if m.onHomeScreen() && len(m.homeCarousels) > 0 {
+		m.activeCarousel = clampIndex(m.activeCarousel, len(m.homeCarousels))
 		title = m.homeCarousels[m.activeCarousel].Title
 	} else if m.currentScreen() == screenExplore && m.exploreSubTab == "overview" {
 		cars := m.exploreOverviewCarousels()
 		if len(cars) > 0 {
+			m.activeCarousel = clampIndex(m.activeCarousel, len(cars))
 			title = cars[m.activeCarousel].Title
+		}
+	} else if m.currentScreen() == screenLibrary {
+		switch m.libraryTab {
+		case "playlists":
+			title = "Playlists"
+		case "albums":
+			title = "Albums"
+		case "artists":
+			title = "Artists"
 		}
 	}
 	if title == "" {
@@ -426,6 +506,7 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 		if len(m.homeCarousels) == 0 {
 			return m, nil
 		}
+		m.activeCarousel = clampIndex(m.activeCarousel, len(m.homeCarousels))
 		car := m.homeCarousels[m.activeCarousel]
 		if m.homeCardCursor < 0 || m.homeCardCursor >= len(car.Contents) {
 			return m, nil
@@ -447,6 +528,32 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 		return mm, cmd
 
 	case screenExplore:
+		if m.exploreSubTab == "overview" {
+			cars := m.exploreOverviewCarousels()
+			if len(cars) == 0 {
+				return m, nil
+			}
+			m.activeCarousel = clampIndex(m.activeCarousel, len(cars))
+			car := cars[m.activeCarousel]
+			if m.homeCardCursor < 0 || m.homeCardCursor >= len(car.Contents) {
+				return m, nil
+			}
+			card := car.Contents[m.homeCardCursor]
+			zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID)
+			if zid == "" {
+				return m, nil
+			}
+			artist := ""
+			if len(card.Artists) > 0 {
+				artist = card.Artists[0].Name
+			}
+			thumb := ""
+			if len(card.Thumbnails) > 0 {
+				thumb = card.Thumbnails[0].URL
+			}
+			mm, cmd, _ := m.dispatchZone(zid, card.Title, artist, thumb)
+			return mm, cmd
+		}
 		if m.exploreSubTab == "moods" && m.activeMoodParams != "" && len(m.moodPlaylists) > 0 {
 			// listCursor is the row index; within a row the left cell (col 0) is focused
 			row := m.listCursor
@@ -468,6 +575,60 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 			}
 			mm, cmd, _ := m.dispatchZone("open_playlist_"+pid, title, "", thumb)
 			return mm, cmd
+		}
+		return m, nil
+
+	case screenLibrary:
+		switch m.libraryTab {
+		case "playlists":
+			if m.homeCardCursor < 0 || m.homeCardCursor >= len(m.libPlaylists) {
+				return m, nil
+			}
+			p := m.libPlaylists[m.homeCardCursor]
+			pid := mapStr(p, "playlistId")
+			if pid != "" {
+				mm, cmd, _ := m.dispatchZone("open_playlist_"+pid, mapStr(p, "title"), mapStr(p, "author"), "")
+				return mm, cmd
+			}
+		case "albums":
+			if m.homeCardCursor < 0 || m.homeCardCursor >= len(m.libAlbums) {
+				return m, nil
+			}
+			a := m.libAlbums[m.homeCardCursor]
+			bid := mapStr(a, "browseId")
+			if bid != "" {
+				mm, cmd, _ := m.dispatchZone("open_album_"+bid, mapStr(a, "title"), "", "")
+				return mm, cmd
+			}
+		case "artists":
+			if m.homeCardCursor < 0 || m.homeCardCursor >= len(m.libArtists) {
+				return m, nil
+			}
+			a := m.libArtists[m.homeCardCursor]
+			bid := mapStr(a, "browseId")
+			if bid != "" {
+				mm, cmd, _ := m.dispatchZone("open_artist_"+bid, mapStr(a, "artist"), "", "")
+				return mm, cmd
+			}
+		case "songs":
+			if m.listCursor < 0 || m.listCursor >= len(m.libSongs) {
+				return m, nil
+			}
+			s := m.libSongs[m.listCursor]
+			vid := mapStr(s, "videoId")
+			if vid != "" {
+				mm, cmd, _ := m.dispatchZone("play_video_"+vid, mapStr(s, "title"), "", "")
+				return mm, cmd
+			}
+		case "downloads":
+			if m.listCursor < 0 || m.listCursor >= len(m.libDownloads) {
+				return m, nil
+			}
+			d := m.libDownloads[m.listCursor]
+			if d.VideoID != "" {
+				mm, cmd, _ := m.dispatchZone("play_video_"+d.VideoID, d.Title, d.Artist, "")
+				return mm, cmd
+			}
 		}
 		return m, nil
 	}
@@ -509,6 +670,9 @@ func (m Model) focusedHomeCard(carouselIndex, cardIndex int) bool {
 	if m.currentScreen() == screenHome || (m.currentScreen() == screenExplore && m.exploreSubTab == "overview") {
 		return m.activeCarousel == carouselIndex && m.homeCardCursor == cardIndex
 	}
+	if m.currentScreen() == screenLibrary && (m.libraryTab == "playlists" || m.libraryTab == "albums" || m.libraryTab == "artists") {
+		return m.activeCarousel == carouselIndex && m.homeCardCursor == cardIndex
+	}
 	return false
 }
 
@@ -535,4 +699,18 @@ func (m Model) searchFocusResults() []ytmapi.SearchResult {
 		out = append(out, grouped[cat]...)
 	}
 	return out
+}
+
+func (m *Model) ensureListCursorInViewGrid(cursor, cols, rowHeight int) {
+	if cols < 1 {
+		cols = 1
+	}
+	row := cursor / cols
+	cursorY := row * rowHeight
+	
+	if cursorY < m.mainViewport.YOffset {
+		m.mainViewport.YOffset = cursorY
+	} else if cursorY+rowHeight > m.mainViewport.YOffset+m.mainViewport.Height {
+		m.mainViewport.YOffset = cursorY + rowHeight - m.mainViewport.Height
+	}
 }

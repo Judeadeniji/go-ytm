@@ -437,7 +437,7 @@ type LibraryDataMsg struct {
 
 func fetchLibraryTab(api *ytmapi.Client, db *library.DB, tab string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 
 		var msg LibraryDataMsg
