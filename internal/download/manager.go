@@ -31,10 +31,9 @@ type Manager struct {
 	db         *library.DB
 	dir        string
 	
-	mu         sync.Mutex
-	queue      []library.CachedTrack
-	active     map[string]context.CancelFunc
-	program    *tea.Program
+	mu      sync.Mutex
+	active  map[string]context.CancelFunc
+	program *tea.Program
 }
 
 // NewManager creates a download manager.

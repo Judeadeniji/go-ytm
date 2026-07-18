@@ -410,10 +410,6 @@ func (m Model) generateDownloadsContent(mainWidth int) string {
 	return mb.String()
 }
 
-func downloadsSectionHeader(title string) string {
-	return lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title) + "\n"
-}
-
 func (m Model) renderDownloadsSummary(activeCount int) string {
 	var parts []string
 	n := len(m.libDownloads)

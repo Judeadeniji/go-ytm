@@ -1,116 +1,147 @@
 # ytm
 
-Terminal YouTube Music client — Bubble Tea TUI, mpv playback, local Python API (`ytmusicapi`).
+YouTube Music in the terminal. Go TUI (Bubble Tea), mpv for audio, and a small local Python API (`ytmusicapi`) that `ytm` starts for you.
 
-## Install (recommended)
+Linux only for now (`amd64` / `arm64`). Still prerelease — expect rough edges.
+
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Judeadeniji/go-ytm/main/scripts/install.sh | bash
 ```
 
+Puts the binary in `~/.local/bin/ytm` and the API tree under `~/.local/share/go-ytm/ytm-api`. Make sure `~/.local/bin` is on your `PATH`.
+
 Then:
 
 ```bash
-ytm doctor   # verify mpv, python3, API files
-ytm          # launch (first run creates the API venv)
+ytm doctor   # mpv, python, API files, socket health
+ytm          # first launch creates the API venv (can take a minute)
 ```
 
-Pin a release:
+### Dependencies
 
-```bash
-VERSION=v0.1.0 bash -c 'curl -fsSL https://raw.githubusercontent.com/Judeadeniji/go-ytm/main/scripts/install.sh | bash'
-```
 
-Ensure `~/.local/bin` is on your `PATH`.
+|             |                               |
+| ----------- | ----------------------------- |
+| **mpv**     | required — playback           |
+| **python3** | required — local `ytm-api`    |
+| **yt-dlp**  | recommended — stream fallback |
 
-### Requirements
-
-| Dependency | Required | Notes |
-|---|---|---|
-| **mpv** | yes | Audio engine (IPC) |
-| **python3** | yes | Runs the local `ytm-api` |
-| **curl** | yes | Installer / health checks |
-| **yt-dlp** | recommended | Fallback for some streams |
 
 ```bash
 # Arch
 pacman -S mpv python yt-dlp
 
-# Debian/Ubuntu
+# Debian / Ubuntu
 sudo apt install mpv python3 yt-dlp
 
 # Fedora
 sudo dnf install mpv python3 yt-dlp
 ```
 
-Kitty (or another terminal with Kitty graphics) improves cover art; plain terminals still work.
+Cover art looks best in Kitty (or anything that speaks the Kitty graphics protocol). Other terminals just skip the images.
 
-### First-run auth
+### From source
 
-1. Start `ytm`
-2. Open **Settings**
-3. Paste request headers or complete OAuth
-
-Auth is stored at `~/.local/state/go-ytm/headers_auth.json`.
-
-In-app shortcuts: press **`?`**.
-
-## From source
+Needs Go 1.26+.
 
 ```bash
 git clone https://github.com/Judeadeniji/go-ytm.git
 cd go-ytm
-make install          # → ~/.local/bin/ytm + share/go-ytm/ytm-api
+make install
 ytm doctor && ytm
 ```
 
-Uninstall:
-
 ```bash
-make uninstall
+make uninstall   # removes ~/.local/bin/ytm and the shared API tree
 ```
 
-### Development
+## Sign in
+
+YouTube Music needs cookies / OAuth. In the TUI:
+
+1. Open **Settings**
+2. **Sign in (Browser Headers)** — paste request headers from a logged-in browser session, or
+3. **Sign in (OAuth)** — point it at a Google `client_secret.json`
+
+Credentials land in `~/.local/state/go-ytm/headers_auth.json`. If search/library stay empty, you’re probably not authed — run through Settings again.
+
+## Using it
+
+```
+ytm              # start
+ytm doctor       # diagnose
+ytm --version
+ytm --help
+```
+
+In-app, press `?` for shortcuts. A few worth knowing:
+
+
+|               |                        |
+| ------------- | ---------------------- |
+| `/`           | search                 |
+| `tab`         | cycle panes            |
+| `p` / `space` | play / pause           |
+| `n` / `b`     | next / previous        |
+| `\`           | toggle queue rail      |
+| `d`           | download focused track |
+| `f`           | now-playing stage      |
+| `q`           | quit                   |
+
+
+Home, Explore, Library, Downloads, and Settings live in the sidebar. Downloads and library metadata stay under the state directory.
+
+## Layout on disk
+
+```
+~/.local/bin/ytm
+~/.local/share/go-ytm/ytm-api/     # Python app + venv
+~/.local/state/go-ytm/
+  ytm-api.sock
+  ytm-api.log
+  api.token
+  headers_auth.json
+  library.db
+  downloads/
+  tui.log
+```
+
+`ytm` opens a Unix socket to the API, waits for `/health`, then draws the UI. If something blows up on start, read `ytm-api.log` or run `ytm doctor`.
+
+
+| Variable        |                                                                      |
+| --------------- | -------------------------------------------------------------------- |
+| `YTM_API_HOME`  | API directory (default: share path, or `./ytm-api` with `YTM_DEV=1`) |
+| `YTM_API_SOCK`  | socket path                                                          |
+| `YTM_API_TOKEN` | bearer token for the local API                                       |
+| `YTM_DEV=1`     | use the repo’s `ytm-api`, log under `tmp/`                           |
+
+
+## Development
 
 ```bash
-make run              # builds bin/ytm, sets YTM_DEV=1, uses ./ytm-api
+make run     # build + YTM_DEV=1
 make test
+make lint
 make build
 ```
 
-## How it works
+`make run` builds `bin/ytm` and points the supervisor at `./ytm-api`. Don’t run the AppImage-hijacked `python3` from some IDEs when creating venvs — `ytm doctor` / the runner prefer `/usr/bin/python3`.
 
-```
-ytm (Go)
-  ├─ starts/reuses ytm-api over a Unix socket
-  ├─ talks to YouTube Music via ytmusicapi
-  └─ plays audio through mpv IPC
-```
+Releases: push a `v*` tag; GitHub Actions + GoReleaser publish Linux archives (binary + `ytm-api/` with `routers/` intact).
 
-| Path | Purpose |
-|---|---|
-| `~/.local/bin/ytm` | CLI |
-| `~/.local/share/go-ytm/ytm-api` | Python API + venv |
-| `~/.local/state/go-ytm/` | socket, token, logs, library DB, auth |
+## Troubleshooting
 
-### Environment
+**`ytm-api exited: exit status 1`**  
+Check `~/.local/state/go-ytm/ytm-api.log`. Common causes: missing `routers/` (reinstall from a current release), broken venv (delete `~/.local/share/go-ytm/ytm-api/venv` and start again), or no usable system Python.
 
-| Variable | Meaning |
-|---|---|
-| `YTM_API_HOME` | Override API directory |
-| `YTM_API_SOCK` | Override Unix socket path |
-| `YTM_API_TOKEN` | Override API auth token |
-| `YTM_DEV=1` | Dev mode (repo `./ytm-api`, logs in `tmp/`) |
+**Install 404 / no release**  
+There may only be prereleases. Pin `VERSION=…` or wait for a stable tag — the installer falls back to the newest release including prereleases when `/releases/latest` is empty.
 
-## Releases
+**No audio**  
+`mpv` must be on `PATH`. `ytm doctor` will say if it isn’t.
 
-Tagged versions (`v*`) publish Linux `amd64` / `arm64` archives via GoReleaser (binary + `ytm-api/`).
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-## License
-
-See repository for license terms.
+**Empty library after “login”**  
+Headers expired or incomplete. Re-auth from Settings.

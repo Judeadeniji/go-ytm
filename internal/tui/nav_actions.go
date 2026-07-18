@@ -1143,9 +1143,16 @@ func (m Model) downloadFocusedCard() (tea.Model, tea.Cmd) {
 			}
 		}
 	case screenExplore:
-		if m.exploreSubTab == "overview" && m.exploreData != nil {
-			if m.activeCarousel >= 0 && m.homeCardCursor >= 0 {
-				// We don't fetch explore overview carousels properly here yet
+		if m.exploreSubTab == "overview" {
+			cars := m.exploreOverviewCarousels()
+			if m.activeCarousel >= 0 && m.activeCarousel < len(cars) {
+				c := cars[m.activeCarousel]
+				if m.homeCardCursor >= 0 && m.homeCardCursor < len(c.Contents) {
+					card := c.Contents[m.homeCardCursor]
+					playlistID = card.PlaylistID
+					browseID = card.BrowseID
+					title = card.Title
+				}
 			}
 		} else if m.exploreSubTab == "moods" && m.activeMoodParams != "" && len(m.moodPlaylists) > 0 {
 			row := m.listCursor
