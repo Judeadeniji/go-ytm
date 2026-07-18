@@ -1,0 +1,54 @@
+version: 2
+
+project_name: ytm
+
+before:
+  hooks:
+    - go mod tidy
+    - bash scripts/prepare-release-api.sh
+
+builds:
+  - id: ytm
+    main: ./cmd/ytm-tui
+    binary: ytm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: .release-api
+        dst: ytm-api
+        strip_parent: true
+      - src: README.md
+        dst: README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: Judeadeniji
+    name: go-ytm
+  draft: false
+  prerelease: auto
