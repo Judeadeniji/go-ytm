@@ -44,7 +44,17 @@ detect_arch() {
 }
 
 latest_tag() {
-	curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+	local tag=""
+	# /releases/latest only returns non-prerelease releases (404 when none exist).
+	tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+		| sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+		| head -n1 || true)"
+	if [[ -n "$tag" ]]; then
+		echo "$tag"
+		return 0
+	fi
+	# Fall back to newest release, including prereleases.
+	curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=10" \
 		| sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
 		| head -n1
 }
@@ -77,12 +87,15 @@ need_cmd mktemp
 TARGET="$(detect_arch)"
 if [[ -z "$VERSION" ]]; then
 	info "Resolving latest release for ${REPO}..."
-	VERSION="$(latest_tag)"
+	VERSION="$(latest_tag || true)"
 	if [[ -z "$VERSION" ]]; then
-		red "error: could not resolve latest release (have any tags been published?)"
-		red "        Build from source: git clone https://github.com/${REPO}.git && cd go-ytm && make install"
+		red "error: could not resolve a GitHub release for ${REPO}"
+		red "        Wait for CI to publish assets, or pin a tag:"
+		red "        VERSION=v0.0.0-prerelease curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash"
+		red "        Or build from source: git clone https://github.com/${REPO}.git && cd go-ytm && make install"
 		exit 1
 	fi
+	info "Using release ${VERSION}"
 fi
 
 info "Installing ytm ${VERSION} (${TARGET}) into ${PREFIX}"
