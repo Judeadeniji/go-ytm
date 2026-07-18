@@ -529,6 +529,14 @@ func (m Model) renderQueueListItem(i int, tr Track, inner int, playing bool) str
 	if tr.IsExplicit {
 		tText += explicitBadge()
 	}
+	if tr.VideoID != "" {
+		for _, dt := range m.libDownloads {
+			if dt.VideoID == tr.VideoID {
+				tText += lipgloss.NewStyle().Foreground(colorAccent).Render(" ✓")
+				break
+			}
+		}
+	}
 	title := lipgloss.NewStyle().
 		Foreground(titleColor).
 		Bold(focused || playing).

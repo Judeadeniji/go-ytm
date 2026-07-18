@@ -130,6 +130,14 @@ func (m Model) renderTrackRow(i int, tr ytmapi.TrackItem, mainWidth int, focused
 	if tr.IsExplicit {
 		tText += explicitBadge()
 	}
+	if tr.VideoID != "" {
+		for _, dt := range m.libDownloads {
+			if dt.VideoID == tr.VideoID {
+				tText += lipgloss.NewStyle().Foreground(colorAccent).Render(" ✓")
+				break
+			}
+		}
+	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Width(titleW).MaxWidth(titleW).Render(tText)
 	artist := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(artistW).MaxWidth(artistW).Render(tr.ArtistName())
 	dur := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Width(durW).Align(lipgloss.Right).Render(tr.DurationLabel())

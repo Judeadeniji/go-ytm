@@ -65,6 +65,9 @@ func main() {
 
 	m := tui.NewModel(p, ext, apiClient, lyricsClient)
 	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	
+	// This won't work perfectly since m is a value, but downloadMgr is a pointer! So we can mutate it on m.
+	m.SetProgram(prog)
 
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)

@@ -12,9 +12,6 @@ import (
 
 // generateMainContent routes the center pane by navigation stack / search / menu.
 func (m Model) generateMainContent(mainWidth int) string {
-	if m.pageLoading {
-		return lipgloss.NewStyle().Foreground(colorSubtext).Padding(2).Render("Loading…")
-	}
 	if m.pageErr != "" {
 		errText := lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.pageErr)
 		retryBtn := lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorText).Padding(0, 2).Render("Retry")
@@ -282,81 +279,146 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 		return mb.String()
 	}
 
+	if m.pageLoading {
+		mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Padding(2).Render("Loading…"))
+		return mb.String()
+	}
+
 	switch m.libraryTab {
 	case "playlists":
 		if len(m.libPlaylists) == 0 {
 			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No playlists found."))
 		} else {
-			for _, pl := range m.libPlaylists {
-				title, _ := pl["title"].(string)
-				desc := "Playlist"
-				if author, ok := pl["author"].(string); ok && author != "" {
-					desc = "by " + author
-				}
-				titleStyled := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title)
-				subStyled := lipgloss.NewStyle().Foreground(colorSubtext).Render(desc)
-				art := artPlaceholder() // we can load real thumbnails later
-				row := lipgloss.JoinHorizontal(lipgloss.Top, art, "   ", lipgloss.JoinVertical(lipgloss.Left, titleStyled, "\n"+subStyled))
-				mb.WriteString(row)
-				mb.WriteString("\n\n")
+			var cards []ytmapi.HomeCarouselItem
+			for _, p := range m.libPlaylists {
+				title, _ := p["title"].(string)
+				id, _ := p["playlistId"].(string)
+				cards = append(cards, ytmapi.HomeCarouselItem{
+					ZoneID:     "open_playlist_" + id,
+					Title:      title,
+					PlaylistID: id,
+					Thumbnails: mapThumbnails(p),
+				})
 			}
+			mb.WriteString(m.renderGrid("Playlists", cards, mainWidth))
 		}
 	case "songs":
 		if len(m.libSongs) == 0 {
 			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No songs found."))
 		} else {
+			var tracks []ytmapi.TrackItem
 			for _, s := range m.libSongs {
-				title, _ := s["title"].(string)
-				mb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render("🎵 " + title))
-				mb.WriteString("\n\n")
+				tracks = append(tracks, mapTrackItem(s))
+			}
+			viewsW := tracklistViewsWidth(tracks)
+			for i, tr := range tracks {
+				focused := m.activePane == PaneMain && i == m.listCursor
+				mb.WriteString(m.renderTrackRow(i, tr, mainWidth, focused, viewsW))
+				mb.WriteString("\n")
 			}
 		}
 	case "albums":
 		if len(m.libAlbums) == 0 {
 			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No albums found."))
 		} else {
+			var cards []ytmapi.HomeCarouselItem
 			for _, a := range m.libAlbums {
 				title, _ := a["title"].(string)
-				mb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render("💿 " + title))
-				mb.WriteString("\n\n")
+				id, _ := a["browseId"].(string)
+				year, _ := a["year"].(string)
+				cards = append(cards, ytmapi.HomeCarouselItem{
+					ZoneID:     "open_album_" + id,
+					Title:      title,
+					BrowseID:   id,
+					Thumbnails: mapThumbnails(a),
+				})
+				_ = year // Not shown in basic carousel
 			}
+			mb.WriteString(m.renderGrid("Albums", cards, mainWidth))
 		}
 	case "artists":
 		if len(m.libArtists) == 0 {
 			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No artists found."))
 		} else {
+			var cards []ytmapi.HomeCarouselItem
 			for _, a := range m.libArtists {
 				name, _ := a["artist"].(string)
-				mb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render("👤 " + name))
-				mb.WriteString("\n\n")
+				id, _ := a["browseId"].(string)
+				cards = append(cards, ytmapi.HomeCarouselItem{
+					ZoneID:     "open_artist_" + id,
+					Title:      name,
+					BrowseID:   id,
+					Thumbnails: mapThumbnails(a),
+				})
 			}
+			mb.WriteString(m.renderGrid("Artists", cards, mainWidth))
 		}
 	case "downloads":
 		if len(m.libDownloads) == 0 {
 			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No downloaded tracks."))
 		} else {
+			var tracks []ytmapi.TrackItem
 			for _, t := range m.libDownloads {
-				titleStyled := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(t.Title)
-				subParts := []string{}
-				if t.Artist != "" {
-					subParts = append(subParts, t.Artist)
-				}
-				if t.Album != "" {
-					subParts = append(subParts, t.Album)
-				}
-				if t.Duration != "" {
-					subParts = append(subParts, t.Duration)
-				}
-				subStyled := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(subParts, " · "))
-				art := artPlaceholder()
-				row := lipgloss.JoinHorizontal(lipgloss.Top, art, "   ", lipgloss.JoinVertical(lipgloss.Left, titleStyled, "\n"+subStyled))
-				mb.WriteString(row)
-				mb.WriteString("\n\n")
+				tracks = append(tracks, ytmapi.TrackItem{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.Artist,
+					Duration: t.Duration,
+					Album:    ytmapi.NamedRef{Name: t.Album},
+				})
+			}
+			viewsW := tracklistViewsWidth(tracks)
+			for i, tr := range tracks {
+				focused := m.activePane == PaneMain && i == m.listCursor
+				mb.WriteString(m.renderTrackRow(i, tr, mainWidth, focused, viewsW))
+				mb.WriteString("\n")
 			}
 		}
 	}
 
 	return mb.String()
+}
+
+func mapThumbnails(item map[string]any) []ytmapi.Thumbnail {
+	if thumbs, ok := item["thumbnails"].([]any); ok && len(thumbs) > 0 {
+		var out []ytmapi.Thumbnail
+		for _, t := range thumbs {
+			if tm, ok := t.(map[string]any); ok {
+				url, _ := tm["url"].(string)
+				width, _ := tm["width"].(float64)
+				height, _ := tm["height"].(float64)
+				out = append(out, ytmapi.Thumbnail{URL: url, Width: int(width), Height: int(height)})
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func mapTrackItem(item map[string]any) ytmapi.TrackItem {
+	var tr ytmapi.TrackItem
+	tr.Title, _ = item["title"].(string)
+	tr.VideoID, _ = item["videoId"].(string)
+	tr.Duration, _ = item["duration"].(string)
+	
+	if artists, ok := item["artists"].([]any); ok {
+		for _, a := range artists {
+			if am, ok := a.(map[string]any); ok {
+				name, _ := am["name"].(string)
+				id, _ := am["id"].(string)
+				tr.Artists = append(tr.Artists, ytmapi.NamedRef{Name: name, ID: id})
+			}
+		}
+	}
+	
+	if album, ok := item["album"].(map[string]any); ok {
+		name, _ := album["name"].(string)
+		id, _ := album["id"].(string)
+		tr.Album = ytmapi.NamedRef{Name: name, ID: id}
+	}
+	
+	tr.Thumbnails = mapThumbnails(item)
+	return tr
 }
 
 func (m Model) generateSearchResultsContent(mainWidth int) string {
@@ -410,6 +472,14 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			title := res.Title
 			if res.IsExplicit {
 				title += explicitBadge()
+			}
+			if res.VideoID != "" {
+				for _, dt := range m.libDownloads {
+					if dt.VideoID == res.VideoID {
+						title += lipgloss.NewStyle().Foreground(colorAccent).Render(" ✓")
+						break
+					}
+				}
 			}
 			badge := ""
 			if res.ResultType == "album" && res.Type != "" {
@@ -696,4 +766,77 @@ func (m Model) renderQuickPicksCarousel(index int, title string, cards []ytmapi.
 
 	row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
 	return row.String() + "\n\n\n"
+}
+
+func (m Model) renderGrid(title string, cards []ytmapi.HomeCarouselItem, mainWidth int) string {
+	var grid strings.Builder
+	cardWidth := artWidth
+	
+	if mainWidth < 22 {
+		return ""
+	}
+	
+	cols := mainWidth / (cardWidth + 2)
+	if cols < 1 {
+		cols = 1
+	}
+	
+	var blocks []string
+	for i, card := range cards {
+		t := card.Title
+		if len(t) > 20 {
+			t = t[:17] + "..."
+		}
+		if card.IsExplicit {
+			t += explicitBadge()
+		}
+		s := homeCardSubtitle(card)
+		if len(s) > 22 {
+			s = s[:19] + "..."
+		}
+
+		art := artPlaceholder()
+		if len(card.Thumbnails) > 0 {
+			art = m.cachedArtAt(card.Thumbnails[0].URL, artWidth, artHeight)
+		}
+
+		titleColor := colorText
+		focused := false
+		if m.activePane == PaneMain && i == m.listCursor {
+			focused = true
+		}
+
+		if focused {
+			titleColor = colorAccent
+		}
+
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			art, "",
+			lipgloss.NewStyle().Bold(true).Foreground(titleColor).Render(t),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render(s),
+		)
+
+		zid := card.ZoneID
+		if zid == "" {
+			zid = entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID)
+		}
+		if zid != "" {
+			content = m.zone.Mark(zid, content)
+		}
+
+		style := lipgloss.NewStyle().Padding(0, 1).Width(cardWidth + 2)
+		blocks = append(blocks, style.Render(content))
+	}
+
+	for i := 0; i < len(blocks); i += cols {
+		end := i + cols
+		if end > len(blocks) {
+			end = len(blocks)
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, blocks[i:end]...)
+		grid.WriteString(row)
+		grid.WriteString("\n\n")
+	}
+
+	return grid.String()
 }

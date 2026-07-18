@@ -3,10 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/judeadeniji/go-ytm/internal/library"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
 )
 
@@ -188,7 +190,7 @@ func isAlbumAudioPlaylistID(id string) bool {
 	return strings.HasPrefix(id, "OLAK5uy_") || strings.HasPrefix(id, "OLA")
 }
 
-func (m Model) openPlaylist(playlistID string) (Model, tea.Cmd) {
+func (m Model) openPlaylist(playlistID, title, author string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading playlist…")
 	if cached, ok := m.pageCache["playlist_"+playlistID].(*ytmapi.PlaylistPage); ok {
 		m.playlistPage = cached
@@ -197,7 +199,7 @@ func (m Model) openPlaylist(playlistID string) (Model, tea.Cmd) {
 		m.statusMsg = "Updating " + cached.Title + "..."
 		m.setMainContent()
 	}
-	return m, fetchPlaylist(m.ytmapiClient, playlistID, m.navGen, m.navCtx)
+	return m, fetchPlaylist(m.ytmapiClient, playlistID, title, author, m.navGen, m.navCtx)
 }
 
 func (m Model) goHome() Model {
@@ -298,7 +300,7 @@ func (m Model) popNav() (Model, tea.Cmd) {
 					m.setMainContent()
 					m.mainViewport.YOffset = 0
 					ctx := m.startNavCtx()
-					return m, fetchPlaylist(m.ytmapiClient, sc.ID, gen, ctx)
+					return m, fetchPlaylist(m.ytmapiClient, sc.ID, "", "", gen, ctx)
 				}
 			default:
 				m.artistPage = nil
@@ -474,8 +476,11 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 	for _, f := range []string{"playlists", "songs", "albums", "artists", "downloads"} {
 		if m.zone.Get("lib_tab_"+f).InBounds(mouse) {
 			m.libraryTab = f
-			m.pageLoading = true
 			m.setMainContent()
+			if m.hasLibraryData(f) {
+				return m, nil, true
+			}
+			m.pageLoading = true
 			return m, fetchLibraryTab(m.ytmapiClient, m.sessionStore, f), true
 		}
 	}
@@ -644,7 +649,7 @@ func (m Model) dispatchZone(zid, title, artist, thumb string) (Model, tea.Cmd, b
 		return mm, cmd, true
 	case strings.HasPrefix(zid, "open_playlist_"):
 		id := strings.TrimPrefix(zid, "open_playlist_")
-		mm, cmd := m.openPlaylist(id)
+		mm, cmd := m.openPlaylist(id, title, artist)
 		return mm, cmd, true
 	case strings.HasPrefix(zid, "open_browse_"):
 		id := strings.TrimPrefix(zid, "open_browse_")
@@ -656,7 +661,7 @@ func (m Model) dispatchZone(zid, title, artist, thumb string) (Model, tea.Cmd, b
 			mm, cmd := m.openAlbum(id)
 			return mm, cmd, true
 		}
-		mm, cmd := m.openPlaylist(id)
+		mm, cmd := m.openPlaylist(id, title, artist)
 		return mm, cmd, true
 	}
 	return m, nil, false
@@ -677,6 +682,158 @@ func thumbURL(thumbs []ytmapi.Thumbnail) string {
 		return thumbs[0].URL
 	}
 	return ""
+}
+
+func (m Model) toggleDownloadFocused() (tea.Model, tea.Cmd) {
+	if m.downloadMgr == nil {
+		m.statusMsg = "Downloads unavailable"
+		return m, nil
+	}
+
+	var track *library.CachedTrack
+
+	if m.nowPlayingOpen {
+		if m.activePane == PaneQueue {
+			if m.queueCursor >= 0 && m.queueCursor < m.queue.Len() {
+				t, ok := m.queue.At(m.queueCursor)
+				if ok {
+					track = &library.CachedTrack{
+						VideoID:  t.VideoID,
+						Title:    t.Title,
+						Artist:   t.Artist,
+						Album:    t.Album,
+						Duration: t.Duration,
+					}
+				}
+			}
+		} else {
+			if m.currentTrack != nil {
+				t := m.currentTrack
+				track = &library.CachedTrack{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.Artist,
+					Album:    t.Album,
+					Duration: t.Duration,
+				}
+			}
+		}
+	} else if m.activePane == PaneMain {
+		if m.onTracklistScreen() {
+			tracks := m.tracklistTracks()
+			if m.trackCursor >= 0 && m.trackCursor < len(tracks) {
+				t := tracks[m.trackCursor]
+				albumStr := ""
+				if aStr, ok := t.Album.(string); ok {
+					albumStr = aStr
+				} else if aRef, ok := t.Album.(ytmapi.NamedRef); ok {
+					albumStr = aRef.Name
+				} else if aMap, ok := t.Album.(map[string]any); ok {
+					if n, ok := aMap["name"].(string); ok {
+						albumStr = n
+					}
+				}
+				track = &library.CachedTrack{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.ArtistName(),
+					Album:    albumStr,
+					Duration: t.Duration,
+				}
+			}
+		} else if sc, ok := m.stack.Current(); ok && sc.Kind == ScreenArtist && m.artistPage != nil && m.listCursor >= 0 {
+			// Actually tracklistTracks doesn't handle ScreenArtist, handle it here
+			if m.artistPage.Songs != nil && m.listCursor < len(m.artistPage.Songs.Results) {
+				t := m.artistPage.Songs.Results[m.listCursor]
+				videoId, _ := t["videoId"].(string)
+				title, _ := t["title"].(string)
+				albumStr := ""
+				if album, ok := t["album"].(map[string]any); ok {
+					albumStr, _ = album["name"].(string)
+				}
+				artistsStr := ""
+				if artists, ok := t["artists"].([]any); ok && len(artists) > 0 {
+					if artMap, ok := artists[0].(map[string]any); ok {
+						artistsStr, _ = artMap["name"].(string)
+					}
+				}
+				track = &library.CachedTrack{
+					VideoID:  videoId,
+					Title:    title,
+					Artist:   artistsStr,
+					Album:    albumStr,
+					Duration: "",
+				}
+			}
+		} else if m.searchResults != nil && m.listCursor >= 0 && m.listCursor < len(m.searchResults) {
+			t := m.searchResults[m.listCursor]
+			if t.VideoID != "" {
+				track = &library.CachedTrack{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.Author,
+					Album:    "", // search results typically lack album
+					Duration: t.Duration,
+				}
+			}
+		}
+	} else if m.activePane == PaneQueue {
+		if m.queueCursor >= 0 && m.queueCursor < m.queue.Len() {
+			t, ok := m.queue.At(m.queueCursor)
+			if ok {
+				track = &library.CachedTrack{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.Artist,
+					Album:    t.Album,
+					Duration: t.Duration,
+				}
+			}
+		}
+	}
+
+	if track == nil || track.VideoID == "" {
+		return m, nil
+	}
+
+	// Toggle
+	isDownloaded := false
+	for _, t := range m.libDownloads {
+		if t.VideoID == track.VideoID {
+			isDownloaded = true
+			break
+		}
+	}
+
+	if isDownloaded {
+		_ = m.sessionStore.RemoveDownload(track.VideoID)
+		
+		// Remove from m.libDownloads and get path
+		var path string
+		for i, t := range m.libDownloads {
+			if t.VideoID == track.VideoID {
+				path = t.Path
+				m.libDownloads = append(m.libDownloads[:i], m.libDownloads[i+1:]...)
+				break
+			}
+		}
+		
+		// Delete actual file
+		if path != "" {
+			_ = os.Remove(path)
+		}
+		
+		m.statusMsg = "Removed from downloads: " + track.Title
+	} else if m.downloadMgr.IsDownloading(track.VideoID) {
+		m.downloadMgr.Cancel(track.VideoID)
+		m.statusMsg = "Canceled download: " + track.Title
+	} else {
+		m.downloadMgr.Enqueue(*track)
+		m.statusMsg = "Downloading: " + track.Title
+	}
+
+	m.setMainContent()
+	return m, nil
 }
 
 func fmtErr(err error) string {
@@ -718,7 +875,7 @@ func (m Model) retryCurrentPage() (Model, tea.Cmd, bool) {
 		case ScreenAlbum:
 			return m, fetchAlbum(m.ytmapiClient, sc.ID, m.navGen, ctx), true
 		case ScreenPlaylist:
-			return m, fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen, ctx), true
+			return m, fetchPlaylist(m.ytmapiClient, sc.ID, "", "", m.navGen, ctx), true
 		case ScreenSearch:
 			return m, doSearchFiltered(m.ytmapiClient, m.lastSearchQuery, m.searchFilter, m.navGen, ctx), true
 		}

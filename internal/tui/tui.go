@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/judeadeniji/go-ytm/internal/download"
 	"github.com/judeadeniji/go-ytm/internal/library"
 	"github.com/judeadeniji/go-ytm/internal/lyrics"
 	"github.com/judeadeniji/go-ytm/internal/player"
@@ -183,6 +184,8 @@ type Model struct {
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
+
+	downloadMgr *download.Manager
 }
 
 func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client, lyricsClient *lyrics.Client) Model {
@@ -217,7 +220,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 	_, errAuth := os.Stat(authFile)
 	isAuthenticated := errAuth == nil
 
-	return Model{
+	m := Model{
 		activePane:     PaneMain,
 		activeCarousel: 0,
 		menuItems:      []string{"Home", "Explore", "Library", "Settings"},
@@ -271,6 +274,10 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		preloadInflight:   make(map[string]struct{}),
 		preloadCancel:     make(map[string]context.CancelFunc),
 	}
+	
+	dlMgr, _ := download.NewManager(ext, store)
+	m.downloadMgr = dlMgr
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -576,6 +583,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		case "d":
+			return m.toggleDownloadFocused()
 		case "-":
 			return m.adjustVolume(-5)
 		case "=", "+":
@@ -655,6 +664,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return mm, mm.enqueueVisibleImages(mm.mainWidth())
 					}
 				}
+				if m.currentScreen() == screenLibrary {
+					if mm, handled := m.moveListFocus(1); handled {
+						return mm, mm.enqueueVisibleImages(mm.mainWidth())
+					}
+				}
 			}
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -678,6 +692,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return mm, mm.enqueueVisibleImages(mm.mainWidth())
 					}
 				}
+				if m.currentScreen() == screenLibrary {
+					if mm, handled := m.moveListFocus(-1); handled {
+						return mm, mm.enqueueVisibleImages(mm.mainWidth())
+					}
+				}
 			}
 			if m.currentTrack != nil {
 				m.clearResumeSeek()
@@ -689,7 +708,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveLyricsCursor(-1)
 				return m, nil
 			}
-			if mm, handled := m.moveListFocus(-1); handled {
+			delta := -1
+			if m.currentScreen() == screenLibrary && m.libraryTab != "songs" && m.libraryTab != "downloads" && m.activePane == PaneMain {
+				cols := m.mainWidth() / 22
+				if cols < 1 { cols = 1 }
+				delta = -cols
+			}
+			if mm, handled := m.moveListFocus(delta); handled {
 				return mm, mm.enqueueVisibleImages(mm.mainWidth())
 			}
 			return m, nil
@@ -698,7 +723,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveLyricsCursor(1)
 				return m, nil
 			}
-			if mm, handled := m.moveListFocus(1); handled {
+			delta := 1
+			if m.currentScreen() == screenLibrary && m.libraryTab != "songs" && m.libraryTab != "downloads" && m.activePane == PaneMain {
+				cols := m.mainWidth() / 22
+				if cols < 1 { cols = 1 }
+				delta = cols
+			}
+			if mm, handled := m.moveListFocus(delta); handled {
 				return mm, mm.enqueueVisibleImages(mm.mainWidth())
 			}
 			return m, nil
@@ -933,6 +964,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pageLoading = false
 		m.setMainContent()
 		return m, m.enqueueVisibleImages(m.mainWidth())
+	case download.ProgressMsg:
+		if msg.Err != nil {
+			m.statusMsg = fmt.Sprintf("Download failed (%s): %v", msg.Track.Title, msg.Err)
+		} else if msg.Done {
+			m.statusMsg = fmt.Sprintf("Downloaded: %s", msg.Track.Title)
+			// Add to memory list if we are in the library
+			found := false
+			for i, t := range m.libDownloads {
+				if t.VideoID == msg.Track.VideoID {
+					m.libDownloads[i] = msg.Track
+					found = true
+					break
+				}
+			}
+			if !found {
+				// Insert at the front so it appears first like ORDER BY cached_at DESC
+				m.libDownloads = append([]library.CachedTrack{msg.Track}, m.libDownloads...)
+			}
+		} else {
+			pct := 0.0
+			if msg.Total > 0 {
+				pct = float64(msg.Bytes) / float64(msg.Total) * 100
+			}
+			m.statusMsg = fmt.Sprintf("Downloading %s... %d%%", msg.Track.Title, int(pct))
+		}
+		
+		// If we're on the downloads tab, we might want to update the content
+		if m.activeMenu == "Library" && m.libraryTab == "downloads" {
+			m.setMainContent()
+		}
+		return m, nil
 	case playerErrMsg:
 		if msg.Err != nil {
 			if msg.Op == "pause" {
@@ -989,6 +1051,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.statusMsg = "Session load failed"
 			return m, nil
+		}
+		if m.sessionStore != nil {
+			if dls, err := m.sessionStore.GetDownloads(); err == nil {
+				m.libDownloads = dls
+			}
 		}
 		cmd := m.applySnapshot(msg.Snap)
 		m.applyLayout()
@@ -1836,6 +1903,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.markSessionDirty()
 						m.setMainContent()
 						m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+						if m.hasLibraryData(m.libraryTab) {
+							return m, nil
+						}
+						m.pageLoading = true
 						return m, fetchLibraryTab(m.ytmapiClient, m.sessionStore, m.libraryTab)
 					}
 					m.activeMenu = item
@@ -2301,6 +2372,41 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 				}
 			}
 		}
+	} else if m.activeMenu == "Library" {
+		contentWidth := mainWidth - 2
+		cardWidth := artWidth
+		cols := contentWidth / (cardWidth + 2)
+		if cols < 1 { cols = 1 }
+		
+		var items []map[string]any
+		switch m.libraryTab {
+		case "playlists":
+			items = m.libPlaylists
+		case "albums":
+			items = m.libAlbums
+		case "artists":
+			items = m.libArtists
+		}
+		
+		if len(items) > 0 {
+			// Calculate visible range based on scroll offset
+			rowHeight := artHeight + 4 // Grid row height (image + text)
+			startRow := m.mainViewport.YOffset / rowHeight
+			visibleRows := (m.mainViewport.Height / rowHeight) + 2
+			
+			startIdx := startRow * cols
+			endIdx := (startRow + visibleRows) * cols
+			if startIdx < 0 { startIdx = 0 }
+			if endIdx > len(items) { endIdx = len(items) }
+			if startIdx < endIdx {
+				for _, item := range items[startIdx:endIdx] {
+					thumbs := mapThumbnails(item)
+					if len(thumbs) > 0 && thumbs[0].URL != "" {
+						queue(thumbs[0].URL, artWidth, artHeight)
+					}
+				}
+			}
+		}
 	} else {
 		contentWidth := mainWidth - 2
 		cardWidth := 28
@@ -2543,4 +2649,26 @@ func (m *Model) pollOAuthTokenCmd(interval int) tea.Cmd {
 		resp, err := m.ytmapiClient.OAuthToken(context.Background(), m.oauthClientID, m.oauthClientSecret, m.oauthCodeResp.DeviceCode)
 		return oauthTokenMsg{resp: resp, err: err}
 	})
+}
+
+func (m *Model) hasLibraryData(tab string) bool {
+	switch tab {
+	case "playlists":
+		return len(m.libPlaylists) > 0
+	case "songs":
+		return len(m.libSongs) > 0
+	case "albums":
+		return len(m.libAlbums) > 0
+	case "artists":
+		return len(m.libArtists) > 0
+	case "downloads":
+		return len(m.libDownloads) > 0
+	}
+	return false
+}
+
+func (m *Model) SetProgram(p *tea.Program) {
+	if m.downloadMgr != nil {
+		m.downloadMgr.SetProgram(p)
+	}
 }
