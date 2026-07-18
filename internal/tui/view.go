@@ -26,7 +26,7 @@ func (m Model) View() string {
 			Background(colorBg).
 			Render(m.generateNowPlayingBody(m.width, contentHeight))
 		base := m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, npBody, playerBar))
-		return m.withToastOverlay(base)
+		return m.withHelpOverlay(m.withToastOverlay(base))
 	}
 
 	// ========================
@@ -135,7 +135,7 @@ func (m Model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	base := m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))
-	return m.withToastOverlay(base)
+	return m.withHelpOverlay(m.withToastOverlay(base))
 }
 
 func (m Model) withToastOverlay(base string) string {

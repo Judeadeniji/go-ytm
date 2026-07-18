@@ -79,6 +79,9 @@ type Model struct {
 	statusMsg string
 	toastAt   time.Time // when statusMsg was last set; zero = no toast
 
+	helpOpen   bool
+	helpOffset int
+
 	nowPlayingOpen     bool
 	nowPlayingTab      string // "lyrics", "related", "queue"
 	lyricsLoading      bool
@@ -368,6 +371,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up":
 				m = m.moveSuggestionFocus(-1)
 				return m, nil
+			case "?":
+				// Allow opening help even from search
+				m.searchInput.Blur()
+				m.searchSuggestions = nil
+				m.helpOpen = true
+				m.helpOffset = 0
+				return m, nil
 			}
 
 			var cmd tea.Cmd
@@ -389,6 +399,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// Shortcuts sheet — intercept before everything else
+		if m.helpOpen {
+			switch msg.String() {
+			case "?", "esc":
+				m.helpOpen = false
+				m.helpOffset = 0
+				return m, nil
+			case "q":
+				m.helpOpen = false
+				m.helpOffset = 0
+				return m, nil
+			case "ctrl+c":
+				// Still allow hard quit from the sheet
+				m.helpOpen = false
+				// fall through by re-dispatching quit path below — handled explicitly:
+				m.cancelPlayExtract()
+				m.cancelAllPrefetches()
+				m.cancelSuggestions()
+				m.cancelLyrics()
+				m.cancelSongDetails()
+				if m.audioLoaded && m.player != nil {
+					if pos, err := m.player.PositionSeconds(); err == nil && pos >= 0 {
+						m.playPos = pos
+					}
+					if dur, err := m.player.DurationSeconds(); err == nil && dur > 0 {
+						m.playDuration = dur
+					}
+				}
+				m.markSessionDirty()
+				return m, tea.Sequence(
+					saveSession(m.sessionStore, m.snapshot()),
+					closeSession(m.sessionStore),
+					tea.Quit,
+				)
+			case "up", "k":
+				m.helpOffset--
+				m.clampHelpOffset(m.contentHeight())
+				return m, nil
+			case "down", "j":
+				m.helpOffset++
+				m.clampHelpOffset(m.contentHeight())
+				return m, nil
+			case "pgup", "ctrl+u":
+				m.helpOffset -= 8
+				m.clampHelpOffset(m.contentHeight())
+				return m, nil
+			case "pgdown", "ctrl+d":
+				m.helpOffset += 8
+				m.clampHelpOffset(m.contentHeight())
+				return m, nil
+			case "home":
+				m.helpOffset = 0
+				return m, nil
+			case "end":
+				m.helpOffset = 1 << 20
+				m.clampHelpOffset(m.contentHeight())
+				return m, nil
+			default:
+				return m, nil
+			}
+		}
+
 		// Settings page keyboard nav (intercept before global keys)
 		if m.activeMenu == "Settings" && !m.nowPlayingOpen {
 			if mm, cmd, handled := m.HandleSettingsKey(msg.String()); handled {
@@ -397,6 +469,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
+		case "?":
+			m.helpOpen = true
+			m.helpOffset = 0
+			return m, nil
 		case "q", "ctrl+c":
 			m.cancelPlayExtract()
 			m.cancelAllPrefetches()
