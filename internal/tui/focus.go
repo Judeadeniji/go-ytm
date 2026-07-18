@@ -125,12 +125,13 @@ func clampIndex(i, n int) int {
 func (m Model) moveListFocus(delta int) (Model, bool) {
 	switch m.activePane {
 	case PaneSidebar:
-		n := len(m.menuItems)
+		n := m.sidebarFocusCount()
 		if n == 0 {
 			return m, false
 		}
 		m.listCursor = clampIndex(m.listCursor+delta, n)
 		m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+		m.ensureSidebarCursorInView()
 		return m, true
 
 	case PaneQueue:
@@ -247,11 +248,20 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 			m.setMainContent()
 			return m, true
 		case "downloads":
-			if len(m.libDownloads) == 0 {
+			items := m.downloadsFocusItems()
+			if len(items) == 0 {
 				return m, false
 			}
-			m.listCursor = clampIndex(m.listCursor+delta, len(m.libDownloads))
-			m.ensureListCursorInView(3, 3)
+			m.listCursor = clampIndex(m.listCursor+delta, len(items))
+			if m.downloadsSubTab == "songs" || m.downloadsSubTab == "active" {
+				m.ensureListCursorInView(6, 1)
+			} else {
+				cols := (m.mainWidth() - 2) / (artWidth + 2)
+				if cols < 1 {
+					cols = 1
+				}
+				m.ensureListCursorInViewGrid(m.listCursor, cols, artHeight+4)
+			}
 			m.setMainContent()
 			return m, true
 		}
@@ -431,6 +441,17 @@ func (m *Model) ensureQueueCursorInView() {
 func (m Model) activateFocused() (Model, tea.Cmd) {
 	switch m.activePane {
 	case PaneSidebar:
+		// Playlist below the menu
+		if plIdx := m.listCursor - len(m.menuItems); plIdx >= 0 && plIdx < len(m.libPlaylists) {
+			p := m.libPlaylists[plIdx]
+			pid := mapStr(p, "playlistId")
+			if pid == "" {
+				return m, nil
+			}
+			mm, cmd := m.openPlaylist(pid, mapStr(p, "title"), mapStr(p, "description"))
+			mm.leftViewport.SetContent(mm.generateSidebarContent(leftSidebarWidth))
+			return mm, cmd
+		}
 		if m.listCursor < 0 || m.listCursor >= len(m.menuItems) {
 			return m, nil
 		}
@@ -621,13 +642,45 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 				return mm, cmd
 			}
 		case "downloads":
-			if m.listCursor < 0 || m.listCursor >= len(m.libDownloads) {
+			item, ok := m.downloadsFocusAt(m.listCursor)
+			if !ok {
 				return m, nil
 			}
-			d := m.libDownloads[m.listCursor]
-			if d.VideoID != "" {
-				mm, cmd, _ := m.dispatchZone("play_video_"+d.VideoID, d.Title, d.Artist, "")
+			switch item.Kind {
+			case dlFocusActive:
+				// Cancel stays on `d`; Enter is a no-op for active rows.
+				return m, nil
+			case dlFocusPlaylist:
+				cols := m.offlineCollectionsByKind("playlist")
+				if item.Index < 0 || item.Index >= len(cols) {
+					return m, nil
+				}
+				c := cols[item.Index]
+				mm, cmd, _ := m.dispatchZone("open_playlist_"+c.ID, c.Title, c.Author, "")
 				return mm, cmd
+			case dlFocusAlbum, dlFocusEP, dlFocusSingle:
+				kind := "album"
+				if item.Kind == dlFocusEP {
+					kind = "ep"
+				} else if item.Kind == dlFocusSingle {
+					kind = "single"
+				}
+				cols := m.offlineCollectionsByKind(kind)
+				if item.Index < 0 || item.Index >= len(cols) {
+					return m, nil
+				}
+				c := cols[item.Index]
+				mm, cmd, _ := m.dispatchZone("open_album_"+c.ID, c.Title, c.Author, "")
+				return mm, cmd
+			case dlFocusSong:
+				if item.Index < 0 || item.Index >= len(m.libDownloads) {
+					return m, nil
+				}
+				d := m.libDownloads[item.Index]
+				if d.VideoID != "" {
+					mm, cmd, _ := m.dispatchZone("play_video_"+d.VideoID, d.Title, d.Artist, "")
+					return mm, cmd
+				}
 			}
 		}
 		return m, nil

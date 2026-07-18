@@ -232,7 +232,7 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 		if cur, ok := m.queue.Current(); ok {
 			cp := cur
 			m.currentTrack = &cp
-			m.statusMsg = "Ready · " + cur.Title
+			m.setStatus("Ready · " + cur.Title)
 			if m.playDuration < 0.5 {
 				m.playDuration = parseClock(cur.Duration)
 			}
@@ -310,7 +310,7 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 	}
 	t := *m.currentTrack
 	if t.VideoID == "" {
-		m.statusMsg = "Cannot resume: missing video id"
+		m.setStatus("Cannot resume: missing video id")
 		return nil
 	}
 	if m.resumeSeek < 0.5 && m.playPos >= 0.5 {
@@ -328,9 +328,9 @@ func (m *Model) cmdResumeUnloadedTrack() tea.Cmd {
 	m.playCancel = cancel
 	m.playCtx = ctx
 	if m.resumeSeek >= 0.5 {
-		m.statusMsg = fmt.Sprintf("Resuming at %s: %s", formatClock(m.resumeSeek), t.Title)
+		m.setStatus(fmt.Sprintf("Resuming at %s: %s", formatClock(m.resumeSeek), t.Title))
 	} else {
-		m.statusMsg = "Resuming: " + t.Title
+		m.setStatus("Resuming: " + t.Title)
 	}
 	// Match beginPlay: stop before extract/load so mpv can't race a stale loadfile.
 	cachedURL, _ := m.peekStreamCache(t.VideoID)

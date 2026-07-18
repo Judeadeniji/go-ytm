@@ -48,11 +48,11 @@ func (m Model) crossfadeSecLabel() string {
 func (m Model) toggleCrossfade() (Model, tea.Cmd) {
 	m.setCrossfadeEnabled(!m.crossfade)
 	if m.crossfade {
-		m.statusMsg = fmt.Sprintf("Crossfade on · %ds", session.ClampCrossfadeSec(m.crossfadeSec))
+		m.setStatus(fmt.Sprintf("Crossfade on · %ds", session.ClampCrossfadeSec(m.crossfadeSec)))
 		m.setQueuePanelContent()
 		return m, m.ensureUpcomingArmed()
 	}
-	m.statusMsg = "Crossfade off"
+	m.setStatus("Crossfade off")
 	m.setQueuePanelContent()
 	mm, cmd := m.disarmCrossfade(true)
 	return mm, cmd
@@ -72,7 +72,7 @@ func (m Model) cycleCrossfadeSec() (Model, tea.Cmd) {
 	if !m.crossfade {
 		m.setCrossfadeEnabled(true)
 	}
-	m.statusMsg = fmt.Sprintf("Crossfade · %ds", next)
+	m.setStatus(fmt.Sprintf("Crossfade · %ds", next))
 	m.setQueuePanelContent()
 	return m, m.ensureUpcomingArmed()
 }
@@ -98,7 +98,7 @@ func (m Model) stepCrossfadeSec(delta int) (Model, tea.Cmd) {
 	if !m.crossfade {
 		m.setCrossfadeEnabled(true)
 	}
-	m.statusMsg = fmt.Sprintf("Crossfade · %ds", crossfadeSecSteps[next])
+	m.setStatus(fmt.Sprintf("Crossfade · %ds", crossfadeSecSteps[next]))
 	m.setQueuePanelContent()
 	m.setMainContent()
 	return m, m.ensureUpcomingArmed()
@@ -259,7 +259,7 @@ func (m Model) promoteArmedTrack() (Model, tea.Cmd) {
 			return m.startQueuedTrack(t)
 		}
 		m.isPlaying = false
-		m.statusMsg = "End of queue"
+		m.setStatus("End of queue")
 		return m, setVolumeOnlyCmd(m.player, m.volume)
 	}
 
@@ -274,7 +274,7 @@ func (m Model) promoteArmedTrack() (Model, tea.Cmd) {
 	m.playGen++
 	sideCmd := m.onTrackChanged()
 	m.queueCursor = m.queue.CurrentIndex()
-	m.statusMsg = "Playing: " + t.Title
+	m.setStatus("Playing: " + t.Title)
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
 		m.ensureTrackCursorInView(10, 1)

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -26,7 +25,8 @@ func (m Model) View() string {
 			Width(m.width).Height(contentHeight).MaxHeight(contentHeight).
 			Background(colorBg).
 			Render(m.generateNowPlayingBody(m.width, contentHeight))
-		return m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, npBody, playerBar))
+		base := m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, npBody, playerBar))
+		return m.withToastOverlay(base)
 	}
 
 	// ========================
@@ -64,20 +64,19 @@ func (m Model) View() string {
 
 	profileIcon := lipgloss.NewStyle().Background(colorDivider).Foreground(colorText).Render(" AJ ")
 
-	// Layout search centered and profile on right
-	rightPadding := searchPadding - 26 // minus profile icon and status msg approx width
-	if rightPadding < 0 {
-		rightPadding = 0
+	// Center search; keep profile pinned to the right without a status slot
+	// (toasts overlay the viewport instead — no header layout shifts).
+	leftPad := searchPadding
+	used := leftPad + lipgloss.Width(searchBox) + 1 + lipgloss.Width(profileIcon)
+	rightPad := mainWidth - used
+	if rightPad < 1 {
+		rightPad = 1
 	}
 
-	statusStyle := lipgloss.NewStyle().Foreground(colorSubtext).Width(28).MaxWidth(28).Align(lipgloss.Right)
-
-	headerContent := fmt.Sprintf("%s%s%s%s   %s",
-		strings.Repeat(" ", searchPadding),
-		searchBox,
-		strings.Repeat(" ", rightPadding),
-		statusStyle.Render(m.statusMsg),
-		profileIcon)
+	headerContent := strings.Repeat(" ", leftPad) +
+		searchBox +
+		strings.Repeat(" ", rightPad) +
+		profileIcon
 
 	header := lipgloss.NewStyle().
 		Background(colorBg).Foreground(colorText).
@@ -135,5 +134,24 @@ func (m Model) View() string {
 	}
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	return m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))
+	base := m.zone.Scan(lipgloss.JoinVertical(lipgloss.Left, body, playerBar))
+	return m.withToastOverlay(base)
+}
+
+func (m Model) withToastOverlay(base string) string {
+	toast := m.renderToast()
+	if toast == "" {
+		return base
+	}
+	tw := lipgloss.Width(toast)
+	th := lipgloss.Height(toast)
+	x := m.width - tw - 2
+	if x < 0 {
+		x = 0
+	}
+	y := m.height - playerBarHeight - th - 1
+	if y < 1 {
+		y = 1
+	}
+	return placeOverlay(base, toast, x, y)
 }

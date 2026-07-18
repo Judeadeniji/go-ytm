@@ -421,7 +421,7 @@ func (m Model) seekToLyricsLine(i int) (Model, tea.Cmd) {
 	m.lyricsIdleAt = time.Time{}
 	m.clearResumeSeek()
 	m.applyLyricsFollowOffset()
-	m.statusMsg = fmt.Sprintf("Seek %s", formatClock(sec))
+	m.setStatus(fmt.Sprintf("Seek %s", formatClock(sec)))
 	return m, tea.Batch(seekAbsoluteCmd(m.player, sec), fetchPlayProgress(m.player))
 }
 

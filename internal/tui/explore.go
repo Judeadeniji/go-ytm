@@ -49,7 +49,7 @@ func (m Model) generateExploreContent(mainWidth int) string {
 		}
 		renderedTabs = append(renderedTabs, m.zone.Mark("explore_tab_"+t.id, style.Render(t.label)))
 	}
-	mb.WriteString(lipgloss.JoinHorizontal(lipgloss.Left, renderedTabs...))
+	mb.WriteString(strings.Join(renderedTabs, "  "))
 	mb.WriteString("\n\n")
 
 	if m.exploreLoading || m.pageLoading {

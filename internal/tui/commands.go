@@ -24,9 +24,14 @@ type TrackStartedMsg struct {
 }
 
 type DownloadListFetchedMsg struct {
-	Tracks []ytmapi.TrackItem
-	Title  string
-	Err    error
+	Tracks       []ytmapi.TrackItem
+	Title        string
+	Author       string
+	PlaylistID   string
+	BrowseID     string
+	AlbumType    string // Album / EP / Single from album pages
+	ThumbnailURL string
+	Err          error
 }
 
 func fetchListForDownload(api *ytmapi.Client, playlistID, browseID string) tea.Cmd {
@@ -35,6 +40,9 @@ func fetchListForDownload(api *ytmapi.Client, playlistID, browseID string) tea.C
 		defer cancel()
 		var tracks []ytmapi.TrackItem
 		var title string
+		var author string
+		var albumType string
+		var thumbURL string
 		var err error
 
 		if playlistID != "" {
@@ -43,6 +51,20 @@ func fetchListForDownload(api *ytmapi.Client, playlistID, browseID string) tea.C
 			if p != nil {
 				tracks = p.Tracks
 				title = p.Title
+				thumbURL = firstThumbURL(p.Thumbnails)
+				if aStr, ok := p.Author.(string); ok {
+					author = aStr
+				} else if aMap, ok := p.Author.(map[string]any); ok {
+					if n, ok := aMap["name"].(string); ok {
+						author = n
+					}
+				} else if aList, ok := p.Author.([]any); ok && len(aList) > 0 {
+					if am, ok := aList[0].(map[string]any); ok {
+						if n, ok := am["name"].(string); ok {
+							author = n
+						}
+					}
+				}
 			}
 		} else if browseID != "" {
 			var a *ytmapi.AlbumPage
@@ -50,9 +72,23 @@ func fetchListForDownload(api *ytmapi.Client, playlistID, browseID string) tea.C
 			if a != nil {
 				tracks = a.Tracks
 				title = a.Title
+				albumType = a.Type
+				thumbURL = firstThumbURL(a.Thumbnails)
+				if len(a.Artists) > 0 {
+					author = a.Artists[0].Name
+				}
 			}
 		}
-		return DownloadListFetchedMsg{Tracks: tracks, Title: title, Err: err}
+		return DownloadListFetchedMsg{
+			Tracks:       tracks,
+			Title:        title,
+			Author:       author,
+			PlaylistID:   playlistID,
+			BrowseID:     browseID,
+			AlbumType:    albumType,
+			ThumbnailURL: thumbURL,
+			Err:          err,
+		}
 	}
 }
 
@@ -459,13 +495,14 @@ func fetchImageSized(url string, width, height int) tea.Cmd {
 
 // LibraryDataMsg returns data for a specific library tab
 type LibraryDataMsg struct {
-	Tab       string
-	Playlists []map[string]any
-	Songs     []map[string]any
-	Albums    []map[string]any
-	Artists   []map[string]any
-	Downloads []library.CachedTrack
-	Err       error
+	Tab         string
+	Playlists   []map[string]any
+	Songs       []map[string]any
+	Albums      []map[string]any
+	Artists     []map[string]any
+	Downloads   []library.CachedTrack
+	Collections []library.OfflineCollection
+	Err         error
 }
 
 func fetchLibraryTab(api *ytmapi.Client, db *library.DB, tab string) tea.Cmd {
@@ -490,8 +527,19 @@ func fetchLibraryTab(api *ytmapi.Client, db *library.DB, tab string) tea.Cmd {
 			res, err := api.GetLibraryArtists(ctx, 100)
 			msg.Artists, msg.Err = res, err
 		case "downloads":
-			res, err := db.GetDownloads()
-			msg.Downloads, msg.Err = res, err
+			if db == nil {
+				msg.Err = fmt.Errorf("library unavailable")
+				break
+			}
+			dls, err := db.GetDownloads()
+			if err != nil {
+				msg.Err = err
+				break
+			}
+			cols, err := db.GetOfflineCollections()
+			msg.Downloads = dls
+			msg.Collections = cols
+			msg.Err = err
 		}
 
 		return msg

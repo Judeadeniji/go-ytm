@@ -241,7 +241,7 @@ func (m Model) settingsActivate(it settingsItem) (Model, tea.Cmd) {
 		m.authState = 1
 		return m, m.openEditorForHeadersCmd()
 	case "settings_history":
-		m.statusMsg = "Listening history toggle (coming soon)"
+		m.setStatus("Listening history toggle (coming soon)")
 		return m, nil
 
 	// playback
@@ -274,16 +274,16 @@ func (m Model) settingsActivate(it settingsItem) (Model, tea.Cmd) {
 
 	// downloads
 	case "settings_clear_cache":
-		m.statusMsg = "Cache cleared (no files downloaded yet)"
+		m.setStatus("Cache cleared (no files downloaded yet)")
 		return m, nil
 	case "settings_cache_size":
-		m.statusMsg = "Calculating…"
+		m.setStatus("Calculating…")
 		return m, nil
 	case "settings_open_downloads":
-		m.statusMsg = "Download folder: ./downloads/"
+		m.setStatus("Download folder: ./downloads/")
 		return m, nil
 	case "settings_dl_quality":
-		m.statusMsg = "Download quality: Best Available"
+		m.setStatus("Download quality: Best Available")
 		return m, nil
 
 	// general
@@ -292,10 +292,10 @@ func (m Model) settingsActivate(it settingsItem) (Model, tea.Cmd) {
 		m.markSessionDirty()
 		return m, nil
 	case "settings_remember_pos":
-		m.statusMsg = "Remember position always enabled"
+		m.setStatus("Remember position always enabled")
 		return m, nil
 	case "settings_clear_session":
-		m.statusMsg = "Session cleared"
+		m.setStatus("Session cleared")
 		return m, nil
 	}
 	return m, nil

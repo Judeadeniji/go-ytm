@@ -39,7 +39,6 @@ type Model struct {
 
 	menuItems  []string
 	activeMenu string
-	playlists  [][2]string
 
 	filters []string
 
@@ -78,6 +77,7 @@ type Model struct {
 	player    *player.Player
 	extractor *search.Extractor
 	statusMsg string
+	toastAt   time.Time // when statusMsg was last set; zero = no toast
 
 	nowPlayingOpen     bool
 	nowPlayingTab      string // "lyrics", "related", "queue"
@@ -151,11 +151,14 @@ type Model struct {
 	queueCursor    int // focus in queue panel (separate from playing index)
 	
 	libraryTab      string // "playlists", "songs", "albums", "artists", "downloads"
+	downloadsSubTab string // "playlists" | "albums" | "songs" | "active"
 	libPlaylists    []map[string]any
 	libSongs        []map[string]any
 	libAlbums       []map[string]any
 	libArtists      []map[string]any
-	libDownloads    []library.CachedTrack
+	libDownloads          []library.CachedTrack
+	libOfflineCollections []library.OfflineCollection
+	dlProgress            map[string]dlProgressEntry // in-flight download progress by videoID
 	
 	railTab        RailTab
 
@@ -225,21 +228,13 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		activeCarousel: 0,
 		menuItems:      []string{"Home", "Explore", "Library", "Settings"},
 		activeMenu:     "Home",
-		libraryTab:     "playlists",
-		libPlaylists:   []map[string]any{},
-		libSongs:       []map[string]any{},
-		libAlbums:      []map[string]any{},
-		libArtists:     []map[string]any{},
-		playlists: [][2]string{
-			{"Liked Music", "📌 Auto playlist"},
-			{"TikTok Songs", "Oluwaferanmi A.J"},
-			{"Elite Raps..", "Misfit"},
-			{"2022 Dump", "Oluwaferanmi A.J"},
-			{"2025 Recap", "Made for Oluwaferanmi A.J"},
-			{"This ain't Odumodu Blvck", "Oluwaferanmi A.J"},
-			{"Violin Classics", "Oluwaferanmi A.J"},
-		},
-		filters:           []string{"All", "Songs", "Albums", "Artists", "Playlists"},
+		libraryTab:      "playlists",
+		downloadsSubTab: "playlists",
+		libPlaylists: []map[string]any{},
+		libSongs:     []map[string]any{},
+		libAlbums:    []map[string]any{},
+		libArtists:   []map[string]any{},
+		filters:      []string{"All", "Songs", "Albums", "Artists", "Playlists"},
 		searchFilter:      "",
 		homeCarousels:     nil,
 		searchSuggestions: []SearchSuggestion{},
@@ -260,7 +255,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		lyricsClient:      lyricsClient,
 		player:            p,
 		extractor:         ext,
-		statusMsg:         status,
+		statusMsg:         "",
 		queue:             Queue{current: -1},
 		volume:            100,
 		tempo:             1.0,
@@ -273,10 +268,14 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		pageCache:         make(map[string]any),
 		preloadInflight:   make(map[string]struct{}),
 		preloadCancel:     make(map[string]context.CancelFunc),
+		dlProgress:        make(map[string]dlProgressEntry),
 	}
 	
 	dlMgr, _ := download.NewManager(ext, store)
 	m.downloadMgr = dlMgr
+	if status != "Ready" {
+		m.setStatus(status)
+	}
 	return m
 }
 
@@ -285,11 +284,12 @@ func (m Model) Init() tea.Cmd {
 		loadSession(m.sessionStore),
 		fetchHome(m.ytmapiClient),
 		tickPlayProgress(),
+		tickToast(),
 		listenTrackEnded(m.player),
 		tickSessionPersist(),
 	}
 	if m.isAuthenticated {
-		cmds = append(cmds, fetchProfile(m.ytmapiClient))
+		cmds = append(cmds, fetchProfile(m.ytmapiClient), fetchLibraryTab(m.ytmapiClient, m.sessionStore, "playlists"))
 	}
 	return tea.Batch(cmds...)
 }
@@ -297,6 +297,9 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case toastTickMsg:
+		m.expireToast()
+		return m, tickToast()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -337,7 +340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.oauthClientSecret = val
 					m.oauthState = 3
 					m.oauthInput.Blur()
-					m.statusMsg = "Requesting OAuth code..."
+					m.setStatus("Requesting OAuth code...")
 					m.setMainContent()
 					return m, m.fetchOAuthCodeCmd()
 				}
@@ -543,7 +546,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelPlayExtract()
 			m.cancelAllPrefetches()
 			m.lastStreamCached = false
-			m.statusMsg = "Stopped playback"
+			m.setStatus("Stopped playback")
 			m.isPlaying = false
 			m.audioLoaded = false
 			m.playPos = 0
@@ -579,7 +582,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.nowPlayingOpen && m.activePane != PaneQueue {
 				m.resyncLyricsFollow()
 				m.syncLyricsFollowOffset()
-				m.statusMsg = "Lyrics following"
+				m.setStatus("Lyrics following")
 				return m, nil
 			}
 			return m, nil
@@ -711,10 +714,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			delta := -1
-			if m.currentScreen() == screenLibrary && m.libraryTab != "songs" && m.libraryTab != "downloads" && m.activePane == PaneMain {
-				cols := m.mainWidth() / 22
-				if cols < 1 { cols = 1 }
-				delta = -cols
+			if m.currentScreen() == screenLibrary && m.activePane == PaneMain {
+				if m.libraryTab == "playlists" || m.libraryTab == "albums" || m.libraryTab == "artists" ||
+					(m.libraryTab == "downloads" && m.downloadsSubTab != "songs" && m.downloadsSubTab != "active") {
+					cols := m.mainWidth() / 22
+					if cols < 1 {
+						cols = 1
+					}
+					delta = -cols
+				}
 			}
 			if mm, handled := m.moveListFocus(delta); handled {
 				return mm, mm.enqueueVisibleImages(mm.mainWidth())
@@ -726,10 +734,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			delta := 1
-			if m.currentScreen() == screenLibrary && m.libraryTab != "songs" && m.libraryTab != "downloads" && m.activePane == PaneMain {
-				cols := m.mainWidth() / 22
-				if cols < 1 { cols = 1 }
-				delta = cols
+			if m.currentScreen() == screenLibrary && m.activePane == PaneMain {
+				if m.libraryTab == "playlists" || m.libraryTab == "albums" || m.libraryTab == "artists" ||
+					(m.libraryTab == "downloads" && m.downloadsSubTab != "songs" && m.downloadsSubTab != "active") {
+					cols := m.mainWidth() / 22
+					if cols < 1 {
+						cols = 1
+					}
+					delta = cols
+				}
 			}
 			if mm, handled := m.moveListFocus(delta); handled {
 				return mm, mm.enqueueVisibleImages(mm.mainWidth())
@@ -786,7 +799,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Prefetched URL went stale — drop it and re-extract once.
 				m.invalidateStreamCache(msg.Track.VideoID)
 				m.lastStreamCached = false
-				m.statusMsg = "Retrying: " + msg.Track.Title
+				m.setStatus("Retrying: " + msg.Track.Title)
 				return m, tea.Sequence(
 					stopPlayback(m.player),
 					playTrack(m.extractor, msg.Track, m.playGen, m.playCtx),
@@ -794,7 +807,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.isPlaying = false
 			m.audioLoaded = false
-			m.statusMsg = shortStreamErr(msg.Err)
+			m.setStatus(shortStreamErr(msg.Err))
 			return m, nil
 		}
 		m.lastStreamCached = false
@@ -818,12 +831,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.playBuffered = m.playPos
 		}
 		if msg.SeekOnlyErr {
-			m.statusMsg = "Playing (seek failed): " + msg.Track.Title
+			m.setStatus("Playing (seek failed): " + msg.Track.Title)
 			if m.resumeSeek >= 0.5 {
 				m.playPos = m.resumeSeek
 			}
 		} else {
-			m.statusMsg = "Playing: " + msg.Track.Title
+			m.setStatus("Playing: " + msg.Track.Title)
 		}
 		m.markSessionDirty()
 		if m.onTracklistScreen() {
@@ -940,6 +953,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ProfileMsg:
 		if msg.Err == nil && msg.Profile != nil && msg.Profile.Name != "" {
 			m.userProfile = msg.Profile
+			if m.leftViewport.Width > 0 {
+				m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+			}
 			if m.activeMenu == "Home" || m.activeMenu == "Library" || m.onHomeScreen() {
 				m.setMainContent()
 			}
@@ -947,9 +963,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case LibraryDataMsg:
 		if msg.Err != nil {
-			m.pageErr = msg.Err.Error()
+			// Background sidebar fetch shouldn't clobber the current page with an error banner.
+			if m.activeMenu == "Library" && m.libraryTab == msg.Tab {
+				m.pageErr = msg.Err.Error()
+			}
 		} else {
-			m.pageErr = ""
+			if m.activeMenu == "Library" && m.libraryTab == msg.Tab {
+				m.pageErr = ""
+			}
 			switch msg.Tab {
 			case "playlists":
 				m.libPlaylists = msg.Playlists
@@ -961,17 +982,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.libArtists = msg.Artists
 			case "downloads":
 				m.libDownloads = msg.Downloads
+				if msg.Collections != nil {
+					m.libOfflineCollections = msg.Collections
+				}
 			}
 		}
 		m.pageLoading = false
+		if m.leftViewport.Width > 0 {
+			m.leftViewport.SetContent(m.generateSidebarContent(leftSidebarWidth))
+		}
 		m.setMainContent()
 		return m, m.enqueueVisibleImages(m.mainWidth())
 	case download.ProgressMsg:
+		if m.dlProgress == nil {
+			m.dlProgress = make(map[string]dlProgressEntry)
+		}
 		if msg.Err != nil {
-			m.statusMsg = fmt.Sprintf("Download failed (%s): %v", msg.Track.Title, msg.Err)
+			delete(m.dlProgress, msg.VideoID)
+			m.notifyDesktop("Download failed", fmt.Sprintf("%s: %v", msg.Track.Title, msg.Err))
 		} else if msg.Done {
-			m.statusMsg = fmt.Sprintf("Downloaded: %s", msg.Track.Title)
-			// Add to memory list if we are in the library
+			delete(m.dlProgress, msg.VideoID)
+			m.notifyDesktop("Download complete", msg.Track.Title)
 			found := false
 			for i, t := range m.libDownloads {
 				if t.VideoID == msg.Track.VideoID {
@@ -981,18 +1012,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if !found {
-				// Insert at the front so it appears first like ORDER BY cached_at DESC
 				m.libDownloads = append([]library.CachedTrack{msg.Track}, m.libDownloads...)
 			}
 		} else {
+			m.dlProgress[msg.VideoID] = dlProgressEntry{
+				Track: msg.Track,
+				Bytes: msg.Bytes,
+				Total: msg.Total,
+			}
 			pct := 0.0
 			if msg.Total > 0 {
 				pct = float64(msg.Bytes) / float64(msg.Total) * 100
 			}
-			m.statusMsg = fmt.Sprintf("Downloading %s... %d%%", msg.Track.Title, int(pct))
+			m.setStatus(fmt.Sprintf("Downloading %s... %d%%", msg.Track.Title, int(pct)))
 		}
-		
-		// If we're on the downloads tab, we might want to update the content
+
+		m.pruneStaleDownloadProgress()
+
 		if m.activeMenu == "Library" && m.libraryTab == "downloads" {
 			m.setMainContent()
 		}
@@ -1012,7 +1048,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if op == "" {
 				op = "player"
 			}
-			m.statusMsg = fmt.Sprintf("%s failed: %v", op, msg.Err)
+			m.setStatus(fmt.Sprintf("%s failed: %v", op, msg.Err))
 		}
 		return m, nil
 	case streamReadyMsg:
@@ -1024,13 +1060,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.lastStreamCached = false
-			m.statusMsg = shortStreamErr(msg.Err)
+			m.setStatus(shortStreamErr(msg.Err))
 			m.isPlaying = false
 			return m, nil
 		}
 		m.lastStreamCached = msg.Cached
 		// Don't warm-cache until Load/Play succeeds (see TrackStartedMsg).
-		m.statusMsg = "Starting: " + msg.Track.Title
+		m.setStatus("Starting: " + msg.Track.Title)
 		seekTo := m.resumeSeek
 		return m, loadTrack(m.player, msg.Track, msg.URL, msg.Gen, seekTo, m.playCtx)
 	case streamPreloadMsg:
@@ -1051,12 +1087,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSleepTick()
 	case sessionLoadedMsg:
 		if msg.Err != nil {
-			m.statusMsg = "Session load failed"
+			m.setStatus("Session load failed")
 			return m, nil
 		}
 		if m.sessionStore != nil {
 			if dls, err := m.sessionStore.GetDownloads(); err == nil {
 				m.libDownloads = dls
+			}
+			if cols, err := m.sessionStore.GetOfflineCollections(); err == nil {
+				m.libOfflineCollections = cols
 			}
 		}
 		cmd := m.applySnapshot(msg.Snap)
@@ -1095,12 +1134,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionSavedMsg:
 		if msg.Err != nil {
 			m.sessionDirty = true
-			m.statusMsg = "Session save failed"
+			m.setStatus("Session save failed")
 		}
 		return m, nil
 	case DownloadListFetchedMsg:
 		if msg.Err != nil {
-			m.statusMsg = "Failed to fetch list for download"
+			m.setStatus("Failed to fetch list for download")
 			return m, nil
 		}
 		var toDownload []library.CachedTrack
@@ -1126,7 +1165,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		count := 0
+		var trackIDs []string
 		for _, track := range toDownload {
+			trackIDs = append(trackIDs, track.VideoID)
 			isDownloaded := false
 			for _, d := range m.libDownloads {
 				if d.VideoID == track.VideoID {
@@ -1136,18 +1177,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !isDownloaded && !m.downloadMgr.IsDownloading(track.VideoID) {
 				m.downloadMgr.Enqueue(track)
+				m.noteDownloadStarted(track)
 				count++
 			}
 		}
+
+		if len(trackIDs) > 0 {
+			col := library.OfflineCollection{
+				Title:        msg.Title,
+				Author:       msg.Author,
+				TrackIDs:     trackIDs,
+				ThumbnailURL: msg.ThumbnailURL,
+			}
+			if msg.PlaylistID != "" {
+				col.ID = msg.PlaylistID
+				col.Kind = "playlist"
+			} else if msg.BrowseID != "" {
+				col.ID = msg.BrowseID
+				col.Kind = normalizeOfflineAlbumKind(msg.AlbumType)
+			}
+			if col.ID != "" && m.sessionStore != nil {
+				_ = m.sessionStore.SaveOfflineCollection(col)
+				m.upsertOfflineCollection(col)
+			}
+		}
+
 		if count > 0 {
-			m.statusMsg = fmt.Sprintf("Enqueued %d tracks from %s", count, msg.Title)
+			m.setStatus(fmt.Sprintf("Enqueued %d tracks from %s", count, msg.Title))
 		} else {
-			m.statusMsg = "No new tracks to download in " + msg.Title
+			m.setStatus("No new tracks to download in " + msg.Title)
+		}
+		if m.activeMenu == "Library" && m.libraryTab == "downloads" {
+			m.setMainContent()
 		}
 		return m, nil
 	case trackEndedMsg:
 		if msg.Closed {
-			m.statusMsg = "Playback engine disconnected"
+			m.setStatus("Playback engine disconnected")
 			m.isPlaying = false
 			return m, nil
 		}
@@ -1170,7 +1236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd == nil {
 			// End of queue
 			mm.isPlaying = false
-			mm.statusMsg = "End of queue"
+			mm.setStatus("End of queue")
 			return mm, rearm
 		}
 		return mm, tea.Batch(cmd, rearm)
@@ -1280,18 +1346,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case StreamURLMsg:
 		if msg.Err != nil {
-			m.statusMsg = shortStreamErr(msg.Err)
+			m.setStatus(shortStreamErr(msg.Err))
 			return m, nil
 		}
 
-		m.statusMsg = "Playing audio!"
+		m.setStatus("Playing audio!")
 		return m, loadAndPlay(m.player, msg.URL)
 	case SearchResultsMsg:
 		if msg.Gen != 0 && msg.Gen != m.navGen {
 			return m, nil
 		}
 		if msg.Err != nil {
-			m.statusMsg = fmt.Sprintf("Search error: %v", msg.Err)
+			m.setStatus(fmt.Sprintf("Search error: %v", msg.Err))
 			m.pageLoading = false
 			return m, nil
 		}
@@ -1305,7 +1371,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playlistPage = nil
 		m.pageLoading = false
 		m.pageErr = ""
-		m.statusMsg = fmt.Sprintf("Found %d results", len(msg.Results))
+		m.setStatus(fmt.Sprintf("Found %d results", len(msg.Results)))
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
@@ -1320,7 +1386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Page == nil && msg.Err == nil {
 				errStr = "empty artist response"
 			}
-			m.statusMsg = "Artist update failed: " + errStr
+			m.setStatus("Artist update failed: " + errStr)
 			if m.artistPage == nil {
 				m.pageErr = errStr
 			}
@@ -1338,7 +1404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pageErr = ""
 
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenArtist, ID: id, Title: msg.Page.Name})
-		m.statusMsg = msg.Page.Name
+		m.setStatus(msg.Page.Name)
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
 		m.mainViewport.YOffset = 0
@@ -1366,7 +1432,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.openOlak(msg.AudioID)
 		}
-		m.statusMsg = "View Album unavailable"
+		m.setStatus("View Album unavailable")
 		m.setMainContent()
 		return m, nil
 	case AlbumMsg:
@@ -1375,27 +1441,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pageLoading = false
 		if msg.Err != nil || msg.Page == nil {
-			errStr := fmtErr(msg.Err)
-			if msg.Page == nil && msg.Err == nil {
-				errStr = "empty album response"
+			var offlineCol *library.OfflineCollection
+			for _, c := range m.libOfflineCollections {
+				if c.ID == msg.BrowseID && isOfflineAlbumKind(c.Kind) {
+					offlineCol = &c
+					break
+				}
 			}
-			m.statusMsg = "Album update failed: " + errStr
-			if m.albumPage == nil {
-				m.pageErr = errStr
+			
+			if offlineCol != nil {
+				// Construct synthetic album page
+				var tracks []ytmapi.TrackItem
+				for _, tid := range offlineCol.TrackIDs {
+					for _, d := range m.libDownloads {
+						if d.VideoID == tid {
+							tracks = append(tracks, ytmapi.TrackItem{
+								VideoID:  d.VideoID,
+								Title:    d.Title,
+								Duration: d.Duration,
+								Album:    ytmapi.NamedRef{Name: d.Album},
+								Artists:  []ytmapi.NamedRef{{Name: d.Artist}},
+							})
+							break
+						}
+					}
+				}
+				msg.Page = &ytmapi.AlbumPage{
+					Title:  offlineCol.Title,
+					Type:   offlineKindBadge(offlineCol.Kind),
+					Tracks: tracks,
+				}
+				msg.Err = nil
 			}
-			m.setMainContent()
-			return m, nil
+			
+			if msg.Err != nil || msg.Page == nil {
+				errStr := fmtErr(msg.Err)
+				if msg.Page == nil && msg.Err == nil {
+					errStr = "empty album response"
+				}
+				m.setStatus("Album update failed: " + errStr)
+				if m.albumPage == nil {
+					m.pageErr = errStr
+				}
+				m.setMainContent()
+				return m, nil
+			}
 		}
 		
 		m.pageCache["album_"+msg.BrowseID] = msg.Page
 		m.albumPage = msg.Page
+		m.backfillOfflineCollectionThumb(msg.BrowseID, firstThumbURL(msg.Page.Thumbnails))
 		m.pageErr = ""
 		n := len(msg.Page.Tracks)
 		if m.trackCursor < 0 || m.trackCursor >= n {
 			m.trackCursor = 0
 		}
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenAlbum, ID: msg.BrowseID, Title: msg.Page.Title})
-		m.statusMsg = msg.Page.Title
+		m.setStatus(msg.Page.Title)
 		m = m.syncTrackCursorToPlaying()
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
@@ -1408,27 +1510,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pageLoading = false
 		if msg.Err != nil || msg.Page == nil {
-			errStr := fmtErr(msg.Err)
-			if msg.Page == nil && msg.Err == nil {
-				errStr = "empty playlist response"
+			var offlineCol *library.OfflineCollection
+			for _, c := range m.libOfflineCollections {
+				if c.ID == msg.PlaylistID && c.Kind == "playlist" {
+					offlineCol = &c
+					break
+				}
 			}
-			m.statusMsg = "Playlist update failed: " + errStr
-			if m.playlistPage == nil {
-				m.pageErr = errStr
+			
+			if offlineCol != nil {
+				// Construct synthetic playlist page
+				var tracks []ytmapi.TrackItem
+				for _, tid := range offlineCol.TrackIDs {
+					for _, d := range m.libDownloads {
+						if d.VideoID == tid {
+							tracks = append(tracks, ytmapi.TrackItem{
+								VideoID:  d.VideoID,
+								Title:    d.Title,
+								Duration: d.Duration,
+								Album:    ytmapi.NamedRef{Name: d.Album},
+								Artists:  []ytmapi.NamedRef{{Name: d.Artist}},
+							})
+							break
+						}
+					}
+				}
+				msg.Page = &ytmapi.PlaylistPage{
+					ID:     offlineCol.ID,
+					Title:  offlineCol.Title,
+					Tracks: tracks,
+				}
+				msg.Err = nil
 			}
-			m.setMainContent()
-			return m, nil
+
+			if msg.Err != nil || msg.Page == nil {
+				errStr := fmtErr(msg.Err)
+				if msg.Page == nil && msg.Err == nil {
+					errStr = "empty playlist response"
+				}
+				m.setStatus("Playlist update failed: " + errStr)
+				if m.playlistPage == nil {
+					m.pageErr = errStr
+				}
+				m.setMainContent()
+				return m, nil
+			}
 		}
 		
 		m.pageCache["playlist_"+msg.Page.ID] = msg.Page
 		m.playlistPage = msg.Page
+		m.backfillOfflineCollectionThumb(msg.Page.ID, firstThumbURL(msg.Page.Thumbnails))
 		m.pageErr = ""
 		n := len(msg.Page.Tracks)
 		if m.trackCursor < 0 || m.trackCursor >= n {
 			m.trackCursor = 0
 		}
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenPlaylist, ID: msg.Page.ID, Title: msg.Page.Title})
-		m.statusMsg = msg.Page.Title
+		m.setStatus(msg.Page.Title)
 		m = m.syncTrackCursorToPlaying()
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
@@ -1444,7 +1582,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil || msg.Watch == nil {
 			if msg.Err != nil {
-				m.statusMsg = "Radio unavailable"
+				m.setStatus("Radio unavailable")
 			}
 			return m, nil
 		}
@@ -1487,7 +1625,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 	case HomeMsg:
 		if msg.Err != nil {
-			m.statusMsg = fmt.Sprintf("Home error: %v", msg.Err)
+			m.setStatus(fmt.Sprintf("Home error: %v", msg.Err))
 			return m, nil
 		}
 		m.homeCarousels = msg.Carousels
@@ -1500,7 +1638,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.exploreLoading = false
 		if msg.Err != nil {
 			m.exploreErr = fmtErr(msg.Err)
-			m.statusMsg = "Explore unavailable"
+			m.setStatus("Explore unavailable")
 			m.setMainContent()
 			return m, nil
 		}
@@ -1515,7 +1653,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.moodCatsLoading = false
 		if msg.Err != nil {
 			m.exploreErr = fmtErr(msg.Err)
-			m.statusMsg = "Moods unavailable"
+			m.setStatus("Moods unavailable")
 			m.setMainContent()
 			return m, nil
 		}
@@ -1530,7 +1668,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.exploreLoading = false
 		if msg.Err != nil {
 			m.exploreErr = fmtErr(msg.Err)
-			m.statusMsg = "Mood playlists unavailable"
+			m.setStatus("Mood playlists unavailable")
 			m.setMainContent()
 			return m, nil
 		}
@@ -1545,7 +1683,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chartsLoading = false
 		if msg.Err != nil {
 			m.exploreErr = fmtErr(msg.Err)
-			m.statusMsg = "Charts unavailable"
+			m.setStatus("Charts unavailable")
 			m.setMainContent()
 			return m, nil
 		}
@@ -1573,7 +1711,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case authHeadersReadyMsg:
-		m.statusMsg = "Authenticating with headers..."
+		m.setStatus("Authenticating with headers...")
 		m.setMainContent()
 		return m, tea.Batch(
 			tea.EnableMouseCellMotion,
@@ -1588,14 +1726,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case authErrorMsg:
 		m.authState = 0
-		m.statusMsg = fmt.Sprintf("Auth error: %v", msg.err)
+		m.notifyDesktop("Authentication failed", fmt.Sprintf("%v", msg.err))
 		m.setMainContent()
 		return m, tea.EnableMouseCellMotion
 
 	case authSuccessMsg:
 		m.authState = 0
 		m.isAuthenticated = true
-		m.statusMsg = "Successfully authenticated!"
+		m.notifyDesktop("Signed in", "Successfully authenticated!")
 		m.homeCarousels = nil
 		m.exploreData = nil
 		m.moodCategories = nil
@@ -1607,7 +1745,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clientSecretParsedMsg:
 		if msg.err != nil {
 			m.oauthState = 0
-			m.statusMsg = fmt.Sprintf("Error parsing client secret: %v", msg.err)
+			m.setStatus(fmt.Sprintf("Error parsing client secret: %v", msg.err))
 			m.setMainContent()
 			return m, nil
 		}
@@ -1615,26 +1753,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.oauthClientSecret = msg.clientSecret
 		m.oauthState = 3
 		m.oauthInput.Blur()
-		m.statusMsg = "Requesting OAuth code..."
+		m.setStatus("Requesting OAuth code...")
 		m.setMainContent()
 		return m, m.fetchOAuthCodeCmd()
 
 	case oauthCodeMsg:
 		if msg.err != nil {
 			m.oauthState = 0
-			m.statusMsg = fmt.Sprintf("OAuth error: %v", msg.err)
+			m.notifyDesktop("OAuth error", fmt.Sprintf("%v", msg.err))
 			m.setMainContent()
 			return m, nil
 		}
 		m.oauthCodeResp = msg.resp
-		m.statusMsg = "Waiting for browser authorization..."
+		m.setStatus("Waiting for browser authorization...")
 		m.setMainContent()
 		return m, m.pollOAuthTokenCmd(msg.resp.Interval)
 
 	case oauthTokenMsg:
 		if msg.err != nil {
 			m.oauthState = 0
-			m.statusMsg = fmt.Sprintf("OAuth token error: %v", msg.err)
+			m.notifyDesktop("OAuth error", fmt.Sprintf("%v", msg.err))
 			m.setMainContent()
 			return m, nil
 		}
@@ -1644,7 +1782,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Success!
 		m.oauthState = 0
 		m.isAuthenticated = true
-		m.statusMsg = "Successfully authenticated!"
+		m.notifyDesktop("Signed in", "Successfully authenticated!")
 		m.oauthCodeResp = nil
 		m.homeCarousels = nil
 		m.exploreData = nil
@@ -1680,7 +1818,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(msg.Err, context.Canceled) {
 				return m, nil
 			}
-			m.statusMsg = "Suggestions unavailable"
+			m.setStatus("Suggestions unavailable")
 			return m, nil
 		}
 		m.searchSuggestions = buildSuggestionList(msg)
@@ -1743,6 +1881,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.zone.Get("player_mute").InBounds(mouseMsg) {
 				return m.toggleMute()
+			}
+			if m.zone.Get("player_shuffle").InBounds(mouseMsg) {
+				return m.toggleShuffle()
+			}
+			if m.zone.Get("player_repeat").InBounds(mouseMsg) {
+				return m.cycleRepeatMode()
 			}
 			if m.zone.Get("player_nowplaying").InBounds(mouseMsg) {
 				return m.openNowPlaying()
@@ -1919,7 +2063,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// ── General tab ─────────────────────────────────────────────
 				if m.zone.Get("settings_clear_session").InBounds(mouseMsg) {
-					m.statusMsg = "Session cleared"
+					m.setStatus("Session cleared")
 					return m, nil
 				}
 			}
@@ -2082,7 +2226,7 @@ func (m Model) cycleRepeatMode() (Model, tea.Cmd) {
 	m.repeatMode = (m.repeatMode + 1) % 3
 	m.markSessionDirty()
 	labels := []string{"Off", "All", "One"}
-	m.statusMsg = "Repeat: " + labels[m.repeatMode]
+	m.setStatus("Repeat: " + labels[m.repeatMode])
 	m.setQueuePanelContent()
 	return m, nil
 }
@@ -2091,9 +2235,9 @@ func (m Model) toggleShuffle() (Model, tea.Cmd) {
 	m.shuffle = !m.shuffle
 	m.markSessionDirty()
 	if m.shuffle {
-		m.statusMsg = "Shuffle: On"
+		m.setStatus("Shuffle: On")
 	} else {
-		m.statusMsg = "Shuffle: Off"
+		m.setStatus("Shuffle: Off")
 	}
 	m.setQueuePanelContent()
 	return m, nil
@@ -2111,7 +2255,7 @@ func (m Model) playNextWithManual(manual bool) (Model, tea.Cmd) {
 
 	t, ok := m.queue.Next(m.shuffle, m.repeatMode == 1) // true if RepeatAll
 	if !ok {
-		m.statusMsg = "End of queue"
+		m.setStatus("End of queue")
 		m.isPlaying = false
 		return m, nil
 	}
@@ -2122,7 +2266,7 @@ func (m Model) playNextWithManual(manual bool) (Model, tea.Cmd) {
 func (m Model) playPrev() (Model, tea.Cmd) {
 	t, ok := m.queue.Prev()
 	if !ok {
-		m.statusMsg = "Start of queue"
+		m.setStatus("Start of queue")
 		return m, nil
 	}
 	return m.startQueuedTrack(t)
@@ -2158,7 +2302,7 @@ func (m Model) startQueuedTrack(t Track) (Model, tea.Cmd) {
 	m.playCtx = ctx
 	sideCmd := m.onTrackChanged()
 	m.queueCursor = m.queue.CurrentIndex()
-	m.statusMsg = "Loading: " + t.Title
+	m.setStatus("Loading: " + t.Title)
 	if m.onTracklistScreen() {
 		m = m.syncTrackCursorToPlaying()
 		m.ensureTrackCursorInView(10, 1)
@@ -2425,33 +2569,74 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 		contentWidth := mainWidth - 2
 		cardWidth := artWidth
 		cols := contentWidth / (cardWidth + 2)
-		if cols < 1 { cols = 1 }
-		
-		var items []map[string]any
-		switch m.libraryTab {
-		case "playlists":
-			items = m.libPlaylists
-		case "albums":
-			items = m.libAlbums
-		case "artists":
-			items = m.libArtists
+		if cols < 1 {
+			cols = 1
 		}
-		
-		if len(items) > 0 {
-			// Calculate visible range based on scroll offset
-			rowHeight := artHeight + 4 // Grid row height (image + text)
-			startRow := m.mainViewport.YOffset / rowHeight
-			visibleRows := (m.mainViewport.Height / rowHeight) + 2
-			
-			startIdx := startRow * cols
-			endIdx := (startRow + visibleRows) * cols
-			if startIdx < 0 { startIdx = 0 }
-			if endIdx > len(items) { endIdx = len(items) }
-			if startIdx < endIdx {
-				for _, item := range items[startIdx:endIdx] {
-					thumbs := mapThumbnails(item)
-					if len(thumbs) > 0 && thumbs[0].URL != "" {
-						queue(thumbs[0].URL, artWidth, artHeight)
+
+		if m.libraryTab == "downloads" {
+			sub := m.downloadsSubTab
+			if sub == "" {
+				sub = "playlists"
+			}
+			if sub != "songs" {
+				var kinds []string
+				switch sub {
+				case "albums":
+					kinds = []string{"album", "ep", "single"}
+				default:
+					kinds = []string{"playlist"}
+				}
+				rowHeight := artHeight + 4
+				startRow := m.mainViewport.YOffset / rowHeight
+				visibleRows := (m.mainViewport.Height / rowHeight) + 2
+				startIdx := startRow * cols
+				endIdx := (startRow + visibleRows) * cols
+				if startIdx < 0 {
+					startIdx = 0
+				}
+				idx := 0
+				for _, kind := range kinds {
+					for _, col := range m.offlineCollectionsByKind(kind) {
+						if idx >= endIdx {
+							break
+						}
+						if idx >= startIdx && col.ThumbnailURL != "" {
+							queue(col.ThumbnailURL, artWidth, artHeight)
+						}
+						idx++
+					}
+				}
+			}
+		} else {
+			var items []map[string]any
+			switch m.libraryTab {
+			case "playlists":
+				items = m.libPlaylists
+			case "albums":
+				items = m.libAlbums
+			case "artists":
+				items = m.libArtists
+			}
+
+			if len(items) > 0 {
+				rowHeight := artHeight + 4
+				startRow := m.mainViewport.YOffset / rowHeight
+				visibleRows := (m.mainViewport.Height / rowHeight) + 2
+
+				startIdx := startRow * cols
+				endIdx := (startRow + visibleRows) * cols
+				if startIdx < 0 {
+					startIdx = 0
+				}
+				if endIdx > len(items) {
+					endIdx = len(items)
+				}
+				if startIdx < endIdx {
+					for _, item := range items[startIdx:endIdx] {
+						thumbs := mapThumbnails(item)
+						if len(thumbs) > 0 {
+							queue(thumbs[0].URL, artWidth, artHeight)
+						}
 					}
 				}
 			}
@@ -2711,7 +2896,7 @@ func (m *Model) hasLibraryData(tab string) bool {
 	case "artists":
 		return len(m.libArtists) > 0
 	case "downloads":
-		return len(m.libDownloads) > 0
+		return len(m.libDownloads) > 0 || len(m.libOfflineCollections) > 0 || len(m.dlProgress) > 0
 	}
 	return false
 }

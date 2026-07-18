@@ -229,7 +229,7 @@ func (m Model) activateSuggestion() (Model, tea.Cmd) {
 	m.searchInput.Blur()
 
 	if s.Type == SuggestionEntity {
-		m.statusMsg = s.Text
+		m.setStatus(s.Text)
 		m.markSessionDirty()
 		zid := entityZoneID(s.VideoID, s.BrowseID, s.PlaylistID)
 		if zid == "" {

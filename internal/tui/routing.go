@@ -33,9 +33,10 @@ type resolveAlbumMsg struct {
 }
 
 type PlaylistMsg struct {
-	Page *ytmapi.PlaylistPage
-	Gen  int
-	Err  error
+	Page       *ytmapi.PlaylistPage
+	PlaylistID string
+	Gen        int
+	Err        error
 }
 
 type WatchMsg struct {
@@ -120,7 +121,7 @@ func fetchPlaylist(api *ytmapi.Client, playlistID, title, author string, gen int
 			ctx = context.Background()
 		}
 		page, err := api.GetPlaylist(ctx, playlistID, title, author, 100)
-		return PlaylistMsg{Page: page, Gen: gen, Err: err}
+		return PlaylistMsg{Page: page, PlaylistID: playlistID, Gen: gen, Err: err}
 	}
 }
 

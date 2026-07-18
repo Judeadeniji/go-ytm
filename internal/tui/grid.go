@@ -152,23 +152,24 @@ func (m Model) renderCarouselRow(index int, title string, cards []ytmapi.HomeCar
 
 		titleColor := colorText
 		focused := m.focusedHomeCard(index, cardIndex)
-		bg := colorBg
 		if focused {
-			bg = colorFocusBg
 			titleColor = colorAccent
 		}
 
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			art, "",
-			lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(t),
-			lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(s),
+			lipgloss.NewStyle().Bold(true).Foreground(titleColor).Render(t),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render(s),
 		)
 
 		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
 			content = m.zone.Mark(zid, content)
 		}
 
-		style := lipgloss.NewStyle().Padding(0, 2).Width(cardWidth).Background(bg)
+		style := lipgloss.NewStyle().Margin(0, 2).Width(cardWidth - 4)
+		if focused {
+			content = lipgloss.NewStyle().Background(colorFocusBg).Render(content)
+		}
 		blocks = append(blocks, style.Render(content))
 	}
 
@@ -270,7 +271,7 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 		ch := m.zone.Mark(fmt.Sprintf("lib_tab_%s", c.value), s.Render(c.label))
 		chips = append(chips, ch)
 	}
-	mb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, chips...))
+	mb.WriteString(strings.Join(chips, "  "))
 	mb.WriteString("\n\n")
 
 	if !m.isAuthenticated && m.libraryTab != "downloads" {
@@ -300,7 +301,7 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 					Thumbnails: mapThumbnails(p),
 				})
 			}
-			mb.WriteString(m.renderGrid("Playlists", cards, mainWidth))
+			mb.WriteString(m.renderGrid("", cards, mainWidth))
 		}
 	case "songs":
 		if len(m.libSongs) == 0 {
@@ -334,7 +335,7 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 				})
 				_ = year // Not shown in basic carousel
 			}
-			mb.WriteString(m.renderGrid("Albums", cards, mainWidth))
+			mb.WriteString(m.renderGrid("", cards, mainWidth))
 		}
 	case "artists":
 		if len(m.libArtists) == 0 {
@@ -351,29 +352,10 @@ func (m Model) generateLibraryContent(mainWidth int) string {
 					Thumbnails: mapThumbnails(a),
 				})
 			}
-			mb.WriteString(m.renderGrid("Artists", cards, mainWidth))
+			mb.WriteString(m.renderGrid("", cards, mainWidth))
 		}
 	case "downloads":
-		if len(m.libDownloads) == 0 {
-			mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No downloaded tracks."))
-		} else {
-			var tracks []ytmapi.TrackItem
-			for _, t := range m.libDownloads {
-				tracks = append(tracks, ytmapi.TrackItem{
-					VideoID:  t.VideoID,
-					Title:    t.Title,
-					Artist:   t.Artist,
-					Duration: t.Duration,
-					Album:    ytmapi.NamedRef{Name: t.Album},
-				})
-			}
-			viewsW := tracklistViewsWidth(tracks)
-			for i, tr := range tracks {
-				focused := m.activePane == PaneMain && i == m.listCursor
-				mb.WriteString(m.renderTrackRow(i, tr, mainWidth, focused, viewsW))
-				mb.WriteString("\n")
-			}
-		}
+		mb.WriteString(m.generateDownloadsContent(mainWidth))
 	}
 
 	return mb.String()
@@ -769,18 +751,29 @@ func (m Model) renderQuickPicksCarousel(index int, title string, cards []ytmapi.
 }
 
 func (m Model) renderGrid(title string, cards []ytmapi.HomeCarouselItem, mainWidth int) string {
+	return m.renderGridAt(title, cards, mainWidth, 0)
+}
+
+// renderGridAt draws a card grid; focusBase offsets listCursor so multiple grids
+// on one page can share a single linear focus index.
+func (m Model) renderGridAt(title string, cards []ytmapi.HomeCarouselItem, mainWidth int, focusBase int) string {
 	var grid strings.Builder
 	cardWidth := artWidth
-	
+
 	if mainWidth < 22 {
 		return ""
 	}
-	
+
+	if title != "" {
+		grid.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(title))
+		grid.WriteString("\n\n")
+	}
+
 	cols := mainWidth / (cardWidth + 2)
 	if cols < 1 {
 		cols = 1
 	}
-	
+
 	var blocks []string
 	for i, card := range cards {
 		t := card.Title
@@ -802,7 +795,7 @@ func (m Model) renderGrid(title string, cards []ytmapi.HomeCarouselItem, mainWid
 
 		titleColor := colorText
 		focused := false
-		if m.activePane == PaneMain && i == m.listCursor {
+		if m.activePane == PaneMain && focusBase+i == m.listCursor {
 			focused = true
 		}
 

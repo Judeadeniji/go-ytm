@@ -622,7 +622,7 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		}
 		if artistID != "" {
 			m.searchInput.Blur()
-			m.statusMsg = "Opening artist…"
+			m.setStatus("Opening artist…")
 			m.markSessionDirty()
 			mm, cmd := m.openArtist(artistID)
 			return mm, cmd, true
@@ -631,7 +631,7 @@ func (m Model) handleRailPanelClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 		m.searchInput.SetValue(artist)
 		m.lastSearchQuery = artist
 		m.searchFilter = "artists"
-		m.statusMsg = "Searching artists: " + artist
+		m.setStatus("Searching artists: " + artist)
 		m.markSessionDirty()
 		m.cancelNavFetch()
 		m.navGen++
