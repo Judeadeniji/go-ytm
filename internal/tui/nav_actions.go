@@ -793,7 +793,7 @@ func (m Model) toggleDownloadFocused() (tea.Model, tea.Cmd) {
 	}
 
 	if track == nil || track.VideoID == "" {
-		return m, nil
+		return m.downloadFocusedCard()
 	}
 
 	// Toggle
@@ -832,6 +832,130 @@ func (m Model) toggleDownloadFocused() (tea.Model, tea.Cmd) {
 		m.statusMsg = "Downloading: " + track.Title
 	}
 
+	m.setMainContent()
+	return m, nil
+}
+
+func (m Model) downloadAllTracks() (tea.Model, tea.Cmd) {
+	if m.downloadMgr == nil {
+		m.statusMsg = "Downloads unavailable"
+		return m, nil
+	}
+
+	var tracksToDownload []library.CachedTrack
+
+	if m.nowPlayingOpen {
+		if m.activePane == PaneQueue {
+			for i := 0; i < m.queue.Len(); i++ {
+				t, ok := m.queue.At(i)
+				if ok && t.VideoID != "" {
+					tracksToDownload = append(tracksToDownload, library.CachedTrack{
+						VideoID:  t.VideoID,
+						Title:    t.Title,
+						Artist:   t.Artist,
+						Album:    t.Album,
+						Duration: t.Duration,
+					})
+				}
+			}
+		}
+	} else if m.activePane == PaneMain {
+		if m.onTracklistScreen() {
+			tracks := m.tracklistTracks()
+			for _, t := range tracks {
+				if t.VideoID != "" {
+					albumStr := ""
+					if aStr, ok := t.Album.(string); ok {
+						albumStr = aStr
+					} else if aRef, ok := t.Album.(ytmapi.NamedRef); ok {
+						albumStr = aRef.Name
+					} else if aMap, ok := t.Album.(map[string]any); ok {
+						if n, ok := aMap["name"].(string); ok {
+							albumStr = n
+						}
+					}
+					tracksToDownload = append(tracksToDownload, library.CachedTrack{
+						VideoID:  t.VideoID,
+						Title:    t.Title,
+						Artist:   t.ArtistName(),
+						Album:    albumStr,
+						Duration: t.Duration,
+					})
+				}
+			}
+		} else if sc, ok := m.stack.Current(); ok && sc.Kind == ScreenArtist && m.artistPage != nil {
+			if m.artistPage.Songs != nil {
+				for _, t := range m.artistPage.Songs.Results {
+					videoId, _ := t["videoId"].(string)
+					if videoId == "" {
+						continue
+					}
+					title, _ := t["title"].(string)
+					albumStr := ""
+					if album, ok := t["album"].(map[string]any); ok {
+						albumStr, _ = album["name"].(string)
+					}
+					artistsStr := ""
+					if artists, ok := t["artists"].([]any); ok && len(artists) > 0 {
+						if artMap, ok := artists[0].(map[string]any); ok {
+							artistsStr, _ = artMap["name"].(string)
+						}
+					}
+					tracksToDownload = append(tracksToDownload, library.CachedTrack{
+						VideoID:  videoId,
+						Title:    title,
+						Artist:   artistsStr,
+						Album:    albumStr,
+					})
+				}
+			}
+		} else if m.searchResults != nil {
+			for _, t := range m.searchResults {
+				if t.VideoID != "" {
+					tracksToDownload = append(tracksToDownload, library.CachedTrack{
+						VideoID:  t.VideoID,
+						Title:    t.Title,
+						Artist:   t.Author,
+						Duration: t.Duration,
+					})
+				}
+			}
+		}
+	} else if m.activePane == PaneQueue {
+		for i := 0; i < m.queue.Len(); i++ {
+			t, ok := m.queue.At(i)
+			if ok && t.VideoID != "" {
+				tracksToDownload = append(tracksToDownload, library.CachedTrack{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.Artist,
+					Album:    t.Album,
+					Duration: t.Duration,
+				})
+			}
+		}
+	}
+
+	count := 0
+	for _, track := range tracksToDownload {
+		isDownloaded := false
+		for _, t := range m.libDownloads {
+			if t.VideoID == track.VideoID {
+				isDownloaded = true
+				break
+			}
+		}
+		if !isDownloaded && !m.downloadMgr.IsDownloading(track.VideoID) {
+			m.downloadMgr.Enqueue(track)
+			count++
+		}
+	}
+
+	if count > 0 {
+		m.statusMsg = fmt.Sprintf("Enqueued %d tracks for download", count)
+	} else {
+		m.statusMsg = "No new tracks to download"
+	}
 	m.setMainContent()
 	return m, nil
 }
@@ -886,5 +1010,58 @@ func (m Model) retryCurrentPage() (Model, tea.Cmd, bool) {
 	}
 
 	return m, nil, false
+}
+
+func (m Model) downloadFocusedCard() (tea.Model, tea.Cmd) {
+	var playlistID, browseID, title string
+	switch m.currentScreen() {
+	case screenHome:
+		if m.activeCarousel >= 0 && m.activeCarousel < len(m.homeCarousels) {
+			c := m.homeCarousels[m.activeCarousel]
+			if m.homeCardCursor >= 0 && m.homeCardCursor < len(c.Contents) {
+				card := c.Contents[m.homeCardCursor]
+				playlistID = card.PlaylistID
+				browseID = card.BrowseID
+				title = card.Title
+			}
+		}
+	case screenExplore:
+		if m.exploreSubTab == "overview" && m.exploreData != nil {
+			if m.activeCarousel >= 0 && m.homeCardCursor >= 0 {
+				// We don't fetch explore overview carousels properly here yet
+			}
+		} else if m.exploreSubTab == "moods" && m.activeMoodParams != "" && len(m.moodPlaylists) > 0 {
+			row := m.listCursor
+			idx := row * 2
+			if idx >= 0 && idx < len(m.moodPlaylists) {
+				p := m.moodPlaylists[idx]
+				playlistID = mapStr(p, "playlistId")
+				title = mapStr(p, "title")
+			}
+		}
+	case screenLibrary:
+		switch m.libraryTab {
+		case "playlists":
+			if m.homeCardCursor >= 0 && m.homeCardCursor < len(m.libPlaylists) {
+				p := m.libPlaylists[m.homeCardCursor]
+				playlistID = mapStr(p, "playlistId")
+				title = mapStr(p, "title")
+			}
+		case "albums":
+			if m.homeCardCursor >= 0 && m.homeCardCursor < len(m.libAlbums) {
+				a := m.libAlbums[m.homeCardCursor]
+				browseID = mapStr(a, "browseId")
+				title = mapStr(a, "title")
+			}
+		}
+	}
+
+	if playlistID == "" && browseID == "" {
+		return m, nil
+	}
+
+	m.statusMsg = "Fetching " + title + " for download..."
+	m.setMainContent()
+	return m, fetchListForDownload(m.ytmapiClient, playlistID, browseID)
 }
 

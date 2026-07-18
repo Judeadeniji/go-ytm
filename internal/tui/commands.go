@@ -23,6 +23,39 @@ type TrackStartedMsg struct {
 	URL         string // stream URL used for Load (commit to warm cache after success)
 }
 
+type DownloadListFetchedMsg struct {
+	Tracks []ytmapi.TrackItem
+	Title  string
+	Err    error
+}
+
+func fetchListForDownload(api *ytmapi.Client, playlistID, browseID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var tracks []ytmapi.TrackItem
+		var title string
+		var err error
+
+		if playlistID != "" {
+			var p *ytmapi.PlaylistPage
+			p, err = api.GetPlaylist(ctx, playlistID, "", "", 100)
+			if p != nil {
+				tracks = p.Tracks
+				title = p.Title
+			}
+		} else if browseID != "" {
+			var a *ytmapi.AlbumPage
+			a, err = api.GetAlbum(ctx, browseID)
+			if a != nil {
+				tracks = a.Tracks
+				title = a.Title
+			}
+		}
+		return DownloadListFetchedMsg{Tracks: tracks, Title: title, Err: err}
+	}
+}
+
 // streamReadyMsg is the async result of resolving a stream URL for a play request.
 type streamReadyMsg struct {
 	Track  Track

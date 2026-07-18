@@ -585,6 +585,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "d":
 			return m.toggleDownloadFocused()
+		case "D":
+			return m.downloadAllTracks()
 		case "-":
 			return m.adjustVolume(-5)
 		case "=", "+":
@@ -1094,6 +1096,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.sessionDirty = true
 			m.statusMsg = "Session save failed"
+		}
+		return m, nil
+	case DownloadListFetchedMsg:
+		if msg.Err != nil {
+			m.statusMsg = "Failed to fetch list for download"
+			return m, nil
+		}
+		var toDownload []library.CachedTrack
+		for _, t := range msg.Tracks {
+			if t.VideoID != "" {
+				albumStr := ""
+				if aStr, ok := t.Album.(string); ok {
+					albumStr = aStr
+				} else if aRef, ok := t.Album.(ytmapi.NamedRef); ok {
+					albumStr = aRef.Name
+				} else if aMap, ok := t.Album.(map[string]any); ok {
+					if n, ok := aMap["name"].(string); ok {
+						albumStr = n
+					}
+				}
+				toDownload = append(toDownload, library.CachedTrack{
+					VideoID:  t.VideoID,
+					Title:    t.Title,
+					Artist:   t.ArtistName(),
+					Album:    albumStr,
+					Duration: t.Duration,
+				})
+			}
+		}
+		count := 0
+		for _, track := range toDownload {
+			isDownloaded := false
+			for _, d := range m.libDownloads {
+				if d.VideoID == track.VideoID {
+					isDownloaded = true
+					break
+				}
+			}
+			if !isDownloaded && !m.downloadMgr.IsDownloading(track.VideoID) {
+				m.downloadMgr.Enqueue(track)
+				count++
+			}
+		}
+		if count > 0 {
+			m.statusMsg = fmt.Sprintf("Enqueued %d tracks from %s", count, msg.Title)
+		} else {
+			m.statusMsg = "No new tracks to download in " + msg.Title
 		}
 		return m, nil
 	case trackEndedMsg:
