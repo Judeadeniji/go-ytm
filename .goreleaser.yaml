@@ -29,10 +29,12 @@ archives:
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    # Include the staged tree as ytm-api/ at archive root (preserve routers/).
-    # Do NOT use strip_parent — it flattens nested packages.
+    # Preserve routers/ under ytm-api/. Do NOT use strip_parent — it flattens
+    # nested packages (routers/auth.py → auth.py). With GoReleaser v2 rlcp,
+    # paths are relative to the longest common prefix of matches.
     files:
-      - src: .release/*
+      - src: .release/ytm-api/**
+        dst: ytm-api
       - src: README.md
         dst: README.md
 
