@@ -56,6 +56,7 @@ type Snapshot struct {
 	QueueIndex       int       `json:"queueIndex"`
 	ShowSearch       bool      `json:"showSearch"`
 	ExploreSubTab    string    `json:"exploreSubTab"`
+	LibraryTab       string    `json:"libraryTab"`
 	Nav              []NavItem `json:"nav"`
 }
 

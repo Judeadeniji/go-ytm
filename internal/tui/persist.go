@@ -89,6 +89,7 @@ func (m Model) snapshot() session.Snapshot {
 		QueueIndex:       m.queue.CurrentIndex(),
 		ShowSearch:       len(m.searchResults) > 0,
 		ExploreSubTab:    m.exploreSubTab,
+		LibraryTab:       m.libraryTab,
 	}
 	for _, t := range m.queue.Tracks() {
 		snap.Queue = append(snap.Queue, session.Track{
@@ -152,6 +153,9 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 	}
 	if snap.ExploreSubTab != "" {
 		m.exploreSubTab = snap.ExploreSubTab
+	}
+	if snap.LibraryTab != "" {
+		m.libraryTab = snap.LibraryTab
 	}
 	m.queuePanelHidden = snap.QueuePanelHidden
 	m.searchFilter = snap.SearchFilter
@@ -263,7 +267,7 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 		case ScreenAlbum:
 			cmds = append(cmds, fetchAlbum(m.ytmapiClient, sc.ID, m.navGen, ctx))
 		case ScreenPlaylist:
-			cmds = append(cmds, fetchPlaylist(m.ytmapiClient, sc.ID, m.navGen, ctx))
+			cmds = append(cmds, fetchPlaylist(m.ytmapiClient, sc.ID, "", "", m.navGen, ctx))
 		}
 		return tea.Batch(cmds...)
 	}
@@ -292,6 +296,9 @@ func (m *Model) applySnapshot(snap *session.Snapshot) tea.Cmd {
 			m.exploreLoading = true
 			cmds = append(cmds, fetchExplore(m.ytmapiClient, m.navGen, ctx))
 		}
+	} else if m.activeMenu == "Library" && m.stack.IsHome() {
+		m.pageLoading = true
+		cmds = append(cmds, fetchLibraryTab(m.ytmapiClient, m.sessionStore, m.libraryTab))
 	}
 	return tea.Batch(cmds...)
 }

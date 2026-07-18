@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -272,6 +272,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 	}
 
+	if ver < 8 {
+		alters := []string{
+			`ALTER TABLE session ADD COLUMN explore_sub_tab TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE session ADD COLUMN library_tab TEXT NOT NULL DEFAULT 'playlists'`,
+			`INSERT INTO schema_migrations(version) VALUES (8)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v8: %w", err)
+			}
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -331,7 +344,8 @@ SELECT active_menu, queue_panel_hidden, search_filter, last_search_query,
        COALESCE(volume, 100), COALESCE(muted, 0),
        COALESCE(play_duration, 0), COALESCE(was_playing, 0), COALESCE(now_playing_open, 0),
        COALESCE(normalize, 0),
-       COALESCE(crossfade, 0), COALESCE(crossfade_sec, 3)
+       COALESCE(crossfade, 0), COALESCE(crossfade_sec, 3),
+       COALESCE(explore_sub_tab, ''), COALESCE(library_tab, 'playlists')
 FROM session WHERE id = 1`).Scan(
 		&snap.ActiveMenu, &hidden, &snap.SearchFilter, &snap.LastSearchQuery,
 		&snap.ActiveCarousel, &snap.HomeCardCursor, &snap.TrackCursor, &snap.ListCursor, &snap.QueueCursor,
@@ -340,6 +354,7 @@ FROM session WHERE id = 1`).Scan(
 		&snap.PlayDuration, &wasPlaying, &nowPlaying,
 		&normalize,
 		&crossfade, &crossfadeSec,
+		&snap.ExploreSubTab, &snap.LibraryTab,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -458,13 +473,13 @@ INSERT INTO session (
   active_carousel, home_card_cursor, track_cursor, list_cursor, queue_cursor,
   play_pos, queue_index, show_search, volume, muted,
   play_duration, was_playing, now_playing_open, normalize,
-  crossfade, crossfade_sec, updated_at
+  crossfade, crossfade_sec, explore_sub_tab, library_tab, updated_at
 ) VALUES (
   1, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
-  ?, ?, datetime('now')
+  ?, ?, ?, ?, datetime('now')
 )
 ON CONFLICT(id) DO UPDATE SET
   active_menu=excluded.active_menu,
@@ -487,12 +502,14 @@ ON CONFLICT(id) DO UPDATE SET
   normalize=excluded.normalize,
   crossfade=excluded.crossfade,
   crossfade_sec=excluded.crossfade_sec,
+  explore_sub_tab=excluded.explore_sub_tab,
+  library_tab=excluded.library_tab,
   updated_at=datetime('now')
 `, snap.ActiveMenu, hidden, snap.SearchFilter, snap.LastSearchQuery,
 		snap.ActiveCarousel, snap.HomeCardCursor, snap.TrackCursor, snap.ListCursor, snap.QueueCursor,
 		snap.PlayPos, snap.QueueIndex, showSearch, vol, muted,
 		snap.PlayDuration, wasPlaying, nowPlaying, normalize,
-		crossfade, crossfadeSec); err != nil {
+		crossfade, crossfadeSec, snap.ExploreSubTab, snap.LibraryTab); err != nil {
 		return err
 	}
 

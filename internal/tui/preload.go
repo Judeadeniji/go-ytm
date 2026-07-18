@@ -86,6 +86,11 @@ func (m *Model) peekStreamCache(videoID string) (string, bool) {
 	if videoID == "" {
 		return "", false
 	}
+	for _, dt := range m.libDownloads {
+		if dt.VideoID == videoID {
+			return dt.Path, true
+		}
+	}
 	e, ok := m.streamCache[videoID]
 	if !ok {
 		return "", false

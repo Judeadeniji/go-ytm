@@ -13,8 +13,8 @@ const (
 
 // Screen is one navigable center view.
 type Screen struct {
-	Kind ScreenKind
-	ID   string // browseId / playlistId / channelId
+	Kind  ScreenKind
+	ID    string // browseId / playlistId / channelId
 	Title string
 }
 

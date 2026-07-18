@@ -9,16 +9,14 @@ import (
 
 // generateExploreContent renders the explore page with sub-tabs for Overview, Moods, and Charts.
 func (m Model) generateExploreContent(mainWidth int) string {
-	if m.exploreLoading {
-		return lipgloss.NewStyle().Foreground(colorSubtext).Render("Loading explore...")
-	}
 	if m.exploreErr != "" {
 		errText := lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.exploreErr)
 		retryBtn := lipgloss.NewStyle().Background(colorSearchBg).Foreground(colorText).Padding(0, 2).Render("Retry")
 		retryBtn = m.zone.Mark("retry_page", retryBtn)
 		return lipgloss.NewStyle().Padding(2).Render(errText + "\n\n" + retryBtn)
 	}
-	if m.exploreData == nil {
+
+	if m.exploreData == nil && !m.exploreLoading {
 		return ""
 	}
 
@@ -53,6 +51,11 @@ func (m Model) generateExploreContent(mainWidth int) string {
 	}
 	mb.WriteString(lipgloss.JoinHorizontal(lipgloss.Left, renderedTabs...))
 	mb.WriteString("\n\n")
+
+	if m.exploreLoading || m.pageLoading {
+		mb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Padding(2).Render("Loading explore..."))
+		return mb.String()
+	}
 
 	// Render the selected sub-tab content
 	switch m.exploreSubTab {

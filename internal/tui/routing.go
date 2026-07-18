@@ -114,12 +114,12 @@ func resolvePlayingAlbum(api *ytmapi.Client, videoID, fallbackName string, gen i
 	}
 }
 
-func fetchPlaylist(api *ytmapi.Client, playlistID string, gen int, ctx context.Context) tea.Cmd {
+func fetchPlaylist(api *ytmapi.Client, playlistID, title, author string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		page, err := api.GetPlaylist(ctx, playlistID, 100)
+		page, err := api.GetPlaylist(ctx, playlistID, title, author, 100)
 		return PlaylistMsg{Page: page, Gen: gen, Err: err}
 	}
 }
