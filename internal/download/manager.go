@@ -93,6 +93,17 @@ func (m *Manager) IsDownloading(videoID string) bool {
 	return ok
 }
 
+// ActiveIDs returns video IDs currently being downloaded.
+func (m *Manager) ActiveIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]string, 0, len(m.active))
+	for id := range m.active {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 type progressWriter struct {
 	videoID string
 	track   library.CachedTrack
