@@ -203,13 +203,20 @@ func (c *Client) GetAlbumBrowseID(ctx context.Context, audioPlaylistID string) (
 	return data.BrowseID, nil
 }
 
-func (c *Client) GetPlaylist(ctx context.Context, playlistID string, limit int) (*PlaylistPage, error) {
+func (c *Client) GetPlaylist(ctx context.Context, playlistID, title, author string, limit int) (*PlaylistPage, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	path := fmt.Sprintf("/playlist/%s?limit=%d", url.PathEscape(playlistID), limit)
+	q := url.Values{}
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if title != "" {
+		q.Set("title", title)
+	}
+	if author != "" {
+		q.Set("author", author)
+	}
 	var data PlaylistPage
-	if err := c.getJSON(ctx, path, &data); err != nil {
+	if err := c.getJSON(ctx, "/playlist/"+url.PathEscape(playlistID)+"?"+q.Encode(), &data); err != nil {
 		return nil, err
 	}
 	return &data, nil

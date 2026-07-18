@@ -76,10 +76,24 @@ def album(browse_id: str):
 def playlist(
     playlist_id: str,
     limit: int = Query(100, ge=1, le=500),
+    title: str | None = Query(None),
+    author: str | None = Query(None),
 ):
     """Playlist page via get_playlist. Strips VL prefix when present."""
     try:
-        return deps.ytmusic.get_playlist(deps._normalize_playlist_id(playlist_id), limit=limit)
+        pid = deps._normalize_playlist_id(playlist_id)
+        if pid.startswith("RD"):
+            # RDAMVM are auto-generated mixes/radios, get_playlist fails on them
+            res = deps.ytmusic.get_watch_playlist(playlistId=pid, limit=limit)
+            return {
+                "id": res.get("playlistId", pid),
+                "title": title or "Mix",
+                "description": "YouTube Music Mix",
+                "author": {"name": author or "YouTube Music", "id": ""},
+                "trackCount": len(res.get("tracks", [])),
+                "tracks": res.get("tracks", [])
+            }
+        return deps.ytmusic.get_playlist(pid, limit=limit)
     except deps._CATCH as exc:
         raise deps._ytm_error(exc) from exc
 

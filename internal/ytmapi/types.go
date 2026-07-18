@@ -56,6 +56,7 @@ type SuggestionRun struct {
 }
 
 type HomeCarouselItem struct {
+	ZoneID      string      `json:"-"`
 	Title       string      `json:"title"`
 	VideoID     string      `json:"videoId,omitempty"`
 	PlaylistID  string      `json:"playlistId,omitempty"`
