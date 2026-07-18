@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 8
+const schemaVersion = 10
 
 // DB is the sqlite-backed local store (session, playlists, download cache).
 type DB struct {
@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 				return fmt.Errorf("migrate v7: %w", err)
 			}
 		}
+		ver = 7
 	}
 
 	if ver < 8 {
@@ -283,6 +284,44 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 				return fmt.Errorf("migrate v8: %w", err)
 			}
 		}
+		ver = 8
+	}
+
+	if ver < 9 {
+		alters := []string{
+			`CREATE TABLE IF NOT EXISTS offline_collection (
+				id TEXT PRIMARY KEY,
+				kind TEXT NOT NULL,
+				title TEXT NOT NULL,
+				author TEXT NOT NULL,
+				track_ids TEXT NOT NULL,
+				cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+			)`,
+			`INSERT INTO schema_migrations(version) VALUES (9)`,
+		}
+		for _, s := range alters {
+			if _, err := tx.Exec(s); err != nil {
+				return fmt.Errorf("migrate v9: %w", err)
+			}
+		}
+		ver = 9
+	}
+
+	if ver < 10 {
+		// v9 created offline_collection without thumbnail_url; add it if missing.
+		var hasCol int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('offline_collection') WHERE name = 'thumbnail_url'`).Scan(&hasCol); err != nil {
+			return fmt.Errorf("migrate v10: check column: %w", err)
+		}
+		if hasCol == 0 {
+			if _, err := tx.Exec(`ALTER TABLE offline_collection ADD COLUMN thumbnail_url TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migrate v10: %w", err)
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES (10)`); err != nil {
+			return fmt.Errorf("migrate v10: %w", err)
+		}
+		ver = 10
 	}
 
 	return tx.Commit()
@@ -644,5 +683,72 @@ func (db *DB) GetLyricsCache(videoID string) (*CachedLyrics, error) {
 		return nil, err
 	}
 	c.Instrumental = inst == 1
+	return &c, nil
+}
+
+type OfflineCollection struct {
+	ID           string
+	Kind         string
+	Title        string
+	Author       string
+	TrackIDs     []string
+	ThumbnailURL string
+}
+
+// SaveOfflineCollection saves a playlist or album to the local DB.
+func (db *DB) SaveOfflineCollection(c OfflineCollection) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	b, _ := json.Marshal(c.TrackIDs)
+	_, err := db.sql.Exec(`INSERT INTO offline_collection (id, kind, title, author, track_ids, thumbnail_url, cached_at)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(id) DO UPDATE SET
+		kind=excluded.kind, title=excluded.title, author=excluded.author,
+		track_ids=excluded.track_ids, thumbnail_url=excluded.thumbnail_url, cached_at=datetime('now')`,
+		c.ID, c.Kind, c.Title, c.Author, string(b), c.ThumbnailURL)
+	return err
+}
+
+// GetOfflineCollections retrieves all offline collections.
+func (db *DB) GetOfflineCollections() ([]OfflineCollection, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.sql.Query(`SELECT id, kind, title, author, track_ids, thumbnail_url FROM offline_collection ORDER BY cached_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var collections []OfflineCollection
+	for rows.Next() {
+		var c OfflineCollection
+		var trackIDsStr string
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Title, &c.Author, &trackIDsStr, &c.ThumbnailURL); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(trackIDsStr), &c.TrackIDs)
+		collections = append(collections, c)
+	}
+	return collections, nil
+}
+
+// GetOfflineCollection retrieves a specific offline collection.
+func (db *DB) GetOfflineCollection(id string) (*OfflineCollection, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	row := db.sql.QueryRow(`SELECT id, kind, title, author, track_ids, thumbnail_url FROM offline_collection WHERE id = ?`, id)
+	var c OfflineCollection
+	var trackIDsStr string
+	err := row.Scan(&c.ID, &c.Kind, &c.Title, &c.Author, &trackIDsStr, &c.ThumbnailURL)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // Not found
+		}
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(trackIDsStr), &c.TrackIDs)
 	return &c, nil
 }
