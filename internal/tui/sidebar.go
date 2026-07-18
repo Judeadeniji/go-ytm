@@ -65,31 +65,75 @@ func (m Model) generateSidebarContent(leftWidth int) string {
 	sb.WriteString(lipgloss.NewStyle().Padding(0, 2).Foreground(colorSubtext).Bold(true).Render("PLAYLISTS"))
 	sb.WriteString("\n\n")
 
-	// New Playlist button
+	// New Playlist button (display-only — no create endpoint yet)
 	newBtn := lipgloss.NewStyle().Foreground(colorText).Render("  +  New playlist")
 	sb.WriteString(newBtn)
 	sb.WriteString("\n\n")
 
-	// Playlists
-	for _, pl := range m.playlists {
-		// Single line compact rendering for TUI
-		title := pl[0]
-		// Shorten title if needed
+	// Playlists from library API
+	for i, pl := range m.libPlaylists {
+		title := mapStr(pl, "title")
+		if title == "" {
+			continue
+		}
 		if len(title) > leftWidth-8 && leftWidth > 8 {
 			title = title[:leftWidth-9] + "…"
 		}
-		
-		icon := "" // Music note icon
-		if strings.Contains(pl[1], "Auto playlist") || strings.Contains(pl[0], "Liked") {
-			icon = "" // Heart icon
+
+		pid := mapStr(pl, "playlistId")
+		icon := "" // Music note
+		if pid == "LM" || strings.Contains(strings.ToLower(title), "liked") {
+			icon = "" // Heart
 		}
 
-		line := lipgloss.NewStyle().Foreground(colorSubtext).Render("  " + icon + "  " + title)
+		focused := m.focusedSidebarPlaylist(i)
+		var line string
+		if focused {
+			line = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("› ") +
+				lipgloss.NewStyle().Foreground(colorText).Bold(true).Background(colorFocusBg).Render(icon+"  "+title)
+		} else {
+			line = lipgloss.NewStyle().Foreground(colorSubtext).Render("  " + icon + "  " + title)
+		}
+		if pid != "" {
+			line = m.zone.Mark("sidebar_playlist_"+pid, line)
+		}
 		sb.WriteString(line)
 		sb.WriteString("\n\n")
 	}
-	
-	// Ensure we push content down so there's some bottom padding
+
 	sb.WriteString("\n\n")
 	return sb.String()
+}
+
+// sidebarFocusCount is menu items + library playlists.
+func (m Model) sidebarFocusCount() int {
+	return len(m.menuItems) + len(m.libPlaylists)
+}
+
+// focusedSidebarPlaylist reports whether playlist i has keyboard focus.
+func (m Model) focusedSidebarPlaylist(i int) bool {
+	return m.activePane == PaneSidebar && m.listCursor == len(m.menuItems)+i
+}
+
+// ensureSidebarCursorInView keeps the focused sidebar row visible.
+func (m *Model) ensureSidebarCursorInView() {
+	viewH := m.leftViewport.Height
+	if viewH <= 0 {
+		return
+	}
+	// Approximate: header(~4) + menu items (2 each) + divider/header/new (~8) + playlists (2 each)
+	cursorLine := 4
+	if m.listCursor < len(m.menuItems) {
+		cursorLine += m.listCursor * 2
+	} else {
+		cursorLine += len(m.menuItems)*2 + 8
+		cursorLine += (m.listCursor - len(m.menuItems)) * 2
+	}
+	top := m.leftViewport.YOffset
+	bottom := top + viewH - 1
+	if cursorLine < top {
+		m.leftViewport.SetYOffset(cursorLine)
+	} else if cursorLine+1 > bottom {
+		m.leftViewport.SetYOffset(cursorLine + 2 - viewH)
+	}
 }
