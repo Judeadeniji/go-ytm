@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -84,11 +85,7 @@ func (r *Runner) spawn() error {
 
 	cmd := exec.Command(uvicorn, "main:app", "--uds", r.Paths.SockPath)
 	cmd.Dir = r.Paths.APIHome
-	cmd.Env = append(os.Environ(),
-		"YTM_API_TOKEN="+r.Token,
-		"VIRTUAL_ENV="+r.Paths.VenvDir,
-		"PATH="+filepath.Join(r.Paths.VenvDir, "bin")+":"+os.Getenv("PATH"),
-	)
+	cmd.Env = append(cleanEnv(r.Paths.VenvDir), "YTM_API_TOKEN="+r.Token)
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	if err := cmd.Start(); err != nil {
@@ -170,8 +167,7 @@ func (p Paths) HealthOK() bool {
 }
 
 func ensureVenv(p Paths) error {
-	uvicorn := filepath.Join(p.VenvDir, "bin", "uvicorn")
-	if _, err := os.Stat(uvicorn); err == nil {
+	if venvOK(p) {
 		return nil
 	}
 
@@ -183,6 +179,8 @@ func ensureVenv(p Paths) error {
 
 	cmd := exec.Command(py, "-m", "venv", p.VenvDir)
 	cmd.Dir = p.APIHome
+	// Clean env so IDE shells can't rewrite sys.executable into an AppImage.
+	cmd.Env = cleanEnv(p.VenvDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("create venv: %w\n%s", err, out)
@@ -192,12 +190,66 @@ func ensureVenv(p Paths) error {
 	req := filepath.Join(p.APIHome, "requirements.txt")
 	cmd = exec.Command(pip, "install", "-q", "-r", req)
 	cmd.Dir = p.APIHome
+	cmd.Env = cleanEnv(p.VenvDir)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pip install: %w\n%s", err, out)
 	}
-	if _, err := os.Stat(uvicorn); err != nil {
-		return fmt.Errorf("venv created but uvicorn missing; pip output:\n%s", out)
+	if !venvOK(p) {
+		return fmt.Errorf("venv created but unusable; pip output:\n%s", out)
 	}
 	return nil
+}
+
+func cleanEnv(venvDir string) []string {
+	path := "/usr/bin:/bin"
+	if venvDir != "" {
+		path = filepath.Join(venvDir, "bin") + ":" + path
+	}
+	env := []string{
+		"PATH=" + path,
+		"HOME=" + os.Getenv("HOME"),
+		"LANG=" + envOr("LANG", "C.UTF-8"),
+		"TERM=" + envOr("TERM", "xterm"),
+		"LC_ALL=" + envOr("LC_ALL", "C.UTF-8"),
+	}
+	if venvDir != "" {
+		env = append(env, "VIRTUAL_ENV="+venvDir)
+	}
+	return env
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// venvOK reports whether the venv has uvicorn and a non-AppImage interpreter.
+func venvOK(p Paths) bool {
+	uvicorn := filepath.Join(p.VenvDir, "bin", "uvicorn")
+	py := filepath.Join(p.VenvDir, "bin", "python")
+	if _, err := os.Stat(uvicorn); err != nil {
+		return false
+	}
+	if _, err := os.Stat(py); err != nil {
+		py = filepath.Join(p.VenvDir, "bin", "python3")
+		if _, err := os.Stat(py); err != nil {
+			return false
+		}
+	}
+	target, err := filepath.EvalSymlinks(py)
+	if err != nil {
+		target = py
+	}
+	lower := strings.ToLower(target)
+	if strings.Contains(lower, "appimage") || strings.Contains(lower, "cursor") {
+		return false
+	}
+	// Spot-check that site-packages are importable (clean env).
+	cmd := exec.Command(py, "-c", "import fastapi, uvicorn, ytmusicapi")
+	cmd.Dir = p.APIHome
+	cmd.Env = cleanEnv(p.VenvDir)
+	return cmd.Run() == nil
 }

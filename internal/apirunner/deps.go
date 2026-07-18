@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,15 +23,41 @@ func CheckPython() error {
 }
 
 func findPython() (string, error) {
-	for _, c := range []string{"/usr/bin/python3", "/usr/bin/python3.14", "/usr/bin/python3.13", "/usr/bin/python3.12", "/usr/bin/python3.11", "/usr/bin/python3.10"} {
-		if st, err := os.Stat(c); err == nil && !st.IsDir() {
-			return c, nil
-		}
+	candidates := []string{
+		"/usr/bin/python3",
+		"/usr/bin/python3.14",
+		"/usr/bin/python3.13",
+		"/usr/bin/python3.12",
+		"/usr/bin/python3.11",
+		"/usr/bin/python3.10",
 	}
 	if p, err := exec.LookPath("python3"); err == nil {
-		return p, nil
+		candidates = append(candidates, p)
 	}
-	return "", fmt.Errorf("python3 not found\nInstall: pacman -S python  |  apt install python3  |  dnf install python3")
+	for _, c := range candidates {
+		if !usablePython(c) {
+			continue
+		}
+		return c, nil
+	}
+	return "", fmt.Errorf("python3 not found (need a real system interpreter, not an AppImage)\nInstall: pacman -S python  |  apt install python3  |  dnf install python3")
+}
+
+func usablePython(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return false
+	}
+	// Resolve symlinks and reject IDE AppImage hijacks (e.g. Cursor).
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		target = path
+	}
+	lower := strings.ToLower(target)
+	if strings.Contains(lower, "appimage") || strings.Contains(lower, "cursor") {
+		return false
+	}
+	return true
 }
 
 // HasYtDLP reports whether yt-dlp is available.

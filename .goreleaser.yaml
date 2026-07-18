@@ -29,10 +29,10 @@ archives:
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Include the staged tree as ytm-api/ at archive root (preserve routers/).
+    # Do NOT use strip_parent — it flattens nested packages.
     files:
-      - src: .release-api
-        dst: ytm-api
-        strip_parent: true
+      - src: .release/*
       - src: README.md
         dst: README.md
 

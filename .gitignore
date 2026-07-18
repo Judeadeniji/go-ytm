@@ -18,6 +18,7 @@
 /tmp/
 /ytm-api/venv/
 .release-api/
+.release/
 
 .build_assets/
 
