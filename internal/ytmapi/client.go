@@ -50,16 +50,40 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 		ctx = context.Background()
 	}
 	u := c.baseURL + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return fmt.Errorf("ytm-api request: %w", err)
-	}
-	if c.token != "" {
-		req.Header.Set("X-API-Token", c.token)
-	}
+	var resp *http.Response
+	var err error
+	var duration time.Duration
 	start := time.Now()
-	resp, err := c.httpClient.Do(req)
-	duration := time.Since(start)
+
+	for i := 0; i < 15; i++ {
+		var req *http.Request
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return fmt.Errorf("ytm-api request: %w", err)
+		}
+		if c.token != "" {
+			req.Header.Set("X-API-Token", c.token)
+		}
+
+		resp, err = c.httpClient.Do(req)
+		if err == nil {
+			break
+		}
+
+		// Only retry on connection refused / no such file
+		errStr := err.Error()
+		if !strings.Contains(errStr, "connect: connection refused") &&
+			!strings.Contains(errStr, "connect: no such file or directory") {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	duration = time.Since(start)
 
 	if err != nil {
 		slog.Error("ytm-api request failed", "method", "GET", "path", path, "err", err, "duration", duration)
@@ -255,6 +279,20 @@ func (c *Client) GetWatchPlaylist(ctx context.Context, videoID, playlistID strin
 	return &data, nil
 }
 
+func (c *Client) GetSongRelated(ctx context.Context, browseID string) ([]RelatedSection, error) {
+	var data []RelatedSection
+	if err := c.getJSON(ctx, "/song/related/"+url.PathEscape(browseID), &data); err != nil {
+		return nil, err
+	}
+	// Parse RawContents into Contents if it's an array
+	for i, sec := range data {
+		if len(sec.RawContents) > 0 && sec.RawContents[0] == '[' {
+			_ = json.Unmarshal(sec.RawContents, &data[i].Contents)
+		}
+	}
+	return data, nil
+}
+
 func (c *Client) GetExplore(ctx context.Context) (*ExploreData, error) {
 	var data ExploreData
 	if err := c.getJSON(ctx, "/explore", &data); err != nil {
@@ -374,18 +412,39 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 		return fmt.Errorf("ytm-api marshal: %w", err)
 	}
 	
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(importBytes)))
-	if err != nil {
-		return fmt.Errorf("ytm-api request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("X-API-Token", c.token)
-	}
-	
+	var resp *http.Response
+	var duration time.Duration
 	start := time.Now()
-	resp, err := c.httpClient.Do(req)
-	duration := time.Since(start)
+
+	for i := 0; i < 15; i++ {
+		var req *http.Request
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(importBytes)))
+		if err != nil {
+			return fmt.Errorf("ytm-api request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.token != "" {
+			req.Header.Set("X-API-Token", c.token)
+		}
+
+		resp, err = c.httpClient.Do(req)
+		if err == nil {
+			break
+		}
+
+		errStr := err.Error()
+		if !strings.Contains(errStr, "connect: connection refused") &&
+			!strings.Contains(errStr, "connect: no such file or directory") {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	duration = time.Since(start)
 
 	if err != nil {
 		slog.Error("ytm-api request failed", "method", "POST", "path", path, "err", err, "duration", duration)

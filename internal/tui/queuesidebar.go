@@ -76,18 +76,24 @@ func (m Model) generateQueuePanelContent(width int) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(m.renderRailTabs(inner))
-	sb.WriteString("\n")
-	sb.WriteString(lipgloss.NewStyle().Padding(0, 1).Foreground(colorDivider).
-		Render(strings.Repeat("─", max(4, inner))))
-	sb.WriteString("\n")
+	
+	if !m.nowPlayingOpen {
+		sb.WriteString(m.renderRailTabs(inner))
+		sb.WriteString("\n")
+		sb.WriteString(lipgloss.NewStyle().Padding(0, 1).Foreground(colorDivider).
+			Render(strings.Repeat("─", max(4, inner))))
+		sb.WriteString("\n")
 
-	switch m.railTab {
-	case RailDetails:
-		sb.WriteString(m.renderRailDetails(inner))
-	default:
+		switch m.railTab {
+		case RailDetails:
+			sb.WriteString(m.renderRailDetails(inner))
+		default:
+			sb.WriteString(m.renderRailQueue(inner))
+		}
+	} else {
 		sb.WriteString(m.renderRailQueue(inner))
 	}
+	
 	return sb.String()
 }
 

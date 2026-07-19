@@ -1,6 +1,9 @@
 package ytmapi
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Thumbnail is a shared image size entry from ytmusicapi responses.
 type Thumbnail struct {
@@ -76,6 +79,13 @@ type HomeCarouselItem struct {
 type HomeCarousel struct {
 	Title    string             `json:"title"`
 	Contents []HomeCarouselItem `json:"contents"`
+}
+
+// RelatedSection is one content block on the related tracks page.
+type RelatedSection struct {
+	Title    string                  `json:"title"`
+	Contents []HomeCarouselItem      `json:"-"` // parsed conditionally
+	RawContents json.RawMessage      `json:"contents"`
 }
 
 // TrackItem is a playable row shared across album/playlist/watch/artist songs.
@@ -202,6 +212,7 @@ type SongDetails struct {
 	VideoType       string       `json:"videoType,omitempty"`
 	Thumbnails      []Thumbnail  `json:"thumbnails,omitempty"`
 	Credits         *SongCredits `json:"credits,omitempty"`
+	RelatedBrowseID string       `json:"relatedBrowseId,omitempty"`
 }
 
 // ArtistNames joins artist display names.

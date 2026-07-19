@@ -99,10 +99,24 @@ func main() {
 	m := tui.NewModel(p, ext, apiClient, lyricsClient)
 	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.SetProgram(prog)
+	errWait := make(chan error, 1)
+	go func() {
+		if err := api.WaitHealthy(); err != nil {
+			errWait <- err
+			prog.Send(tea.Quit())
+		}
+	}()
 
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
 		os.Exit(1)
+	}
+
+	select {
+	case err := <-errWait:
+		fmt.Fprintf(os.Stderr, "\nFatal API Error: %v\n", err)
+		os.Exit(1)
+	default:
 	}
 }
 

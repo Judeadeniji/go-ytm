@@ -62,10 +62,6 @@ func Start() (*Runner, error) {
 	if err := r.spawn(); err != nil {
 		return nil, err
 	}
-	if err := r.waitHealthy(); err != nil {
-		_ = r.Stop()
-		return nil, err
-	}
 	return r, nil
 }
 
@@ -100,7 +96,7 @@ func (r *Runner) spawn() error {
 	return nil
 }
 
-func (r *Runner) waitHealthy() error {
+func (r *Runner) WaitHealthy() error {
 	deadline := time.Now().Add(healthTimeout)
 	for time.Now().Before(deadline) {
 		select {

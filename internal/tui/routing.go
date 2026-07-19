@@ -46,6 +46,13 @@ type WatchMsg struct {
 	Err         error
 }
 
+type RelatedTracksMsg struct {
+	Sections []ytmapi.RelatedSection
+	Gen      int
+	VideoID  string
+	Err      error
+}
+
 func fetchArtist(api *ytmapi.Client, channelID string, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		if ctx == nil {
@@ -129,6 +136,14 @@ func fetchWatch(api *ytmapi.Client, videoID, playlistID string, radio bool, gen 
 	return func() tea.Msg {
 		w, err := api.GetWatchPlaylist(context.Background(), videoID, playlistID, radio, 25)
 		return WatchMsg{Watch: w, Gen: gen, SeedVideoID: videoID, Err: err}
+	}
+}
+
+func fetchRelatedTracks(api *ytmapi.Client, browseID, videoID string, gen int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		sections, err := api.GetSongRelated(ctx, browseID)
+		return RelatedTracksMsg{Sections: sections, Gen: gen, VideoID: videoID, Err: err}
 	}
 }
 

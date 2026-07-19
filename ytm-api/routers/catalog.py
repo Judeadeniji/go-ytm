@@ -85,13 +85,14 @@ def playlist(
         if pid.startswith("RD"):
             # RDAMVM are auto-generated mixes/radios, get_playlist fails on them
             res = deps.ytmusic.get_watch_playlist(playlistId=pid, limit=limit)
+            tracks = res.get("tracks") or []
             return {
                 "id": res.get("playlistId", pid),
                 "title": title or "Mix",
                 "description": "YouTube Music Mix",
                 "author": {"name": author or "YouTube Music", "id": ""},
-                "trackCount": len(res.get("tracks", [])),
-                "tracks": res.get("tracks", [])
+                "trackCount": len(tracks),
+                "tracks": tracks
             }
         return deps.ytmusic.get_playlist(pid, limit=limit)
     except deps._CATCH as exc:
@@ -157,11 +158,13 @@ def song(video_id: str):
         "videoType": "",
         "thumbnails": [],
         "credits": None,
+        "relatedBrowseId": "",
     }
 
     # 1. Watch playlist — best source for artist/album names.
     try:
         watch_data = deps.ytmusic.get_watch_playlist(videoId=video_id, limit=5)
+        out["relatedBrowseId"] = watch_data.get("related") or ""
         for candidate in watch_data.get("tracks") or []:
             if not isinstance(candidate, dict) or candidate.get("videoId") != video_id:
                 continue
@@ -271,3 +274,10 @@ def song(video_id: str):
         raise HTTPException(status_code=404, detail="song metadata unavailable")
 
     return out
+
+@router.get("/song/related/{browse_id}")
+def song_related(browse_id: str):
+    try:
+        return deps.ytmusic.get_song_related(browse_id)
+    except deps._CATCH as exc:
+        raise deps._ytm_error(exc) from exc

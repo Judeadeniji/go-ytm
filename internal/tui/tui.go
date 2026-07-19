@@ -51,6 +51,7 @@ type Model struct {
 	leftViewport      viewport.Model
 	rightViewport     viewport.Model
 	lyricsViewport    viewport.Model
+	relatedViewport   viewport.Model
 	searchInput       textinput.Model
 	searchSuggestions []SearchSuggestion
 	suggestionGen     int // bumps on each query change; ignores stale fetches
@@ -103,6 +104,12 @@ type Model struct {
 	songDetailsLoading bool
 	songDetailsErr     string
 	songDetailsCancel  context.CancelFunc
+	
+	relatedTracks        []ytmapi.RelatedSection
+	relatedTracksVideoID string
+	relatedTracksGen     int
+	relatedTracksLoading bool
+	relatedTracksErr     string
 
 	// Playback state
 	queue            Queue
@@ -248,6 +255,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		leftViewport:      viewport.New(0, 0),
 		rightViewport:     viewport.New(0, 0),
 		lyricsViewport:    viewport.New(0, 0),
+		relatedViewport:   viewport.New(0, 0),
 		searchInput:       ti,
 		isAuthenticated:   isAuthenticated,
 		oauthInput:        oti,
@@ -580,6 +588,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyLayout()
 			return m, m.enqueueVisibleImages(m.mainWidth())
 		case "]":
+			if m.nowPlayingOpen {
+				tabs := []string{"lyrics", "related", "queue"}
+				for i, t := range tabs {
+					if m.nowPlayingTab == t || (m.nowPlayingTab == "" && i == 0) {
+						m.nowPlayingTab = tabs[(i+1)%len(tabs)]
+						m.setMainContent()
+						return m, nil
+					}
+				}
+			}
 			if !m.showQueuePanel() {
 				return m, nil
 			}
@@ -588,6 +606,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activePane = PaneQueue
 			return m, cmd
 		case "[":
+			if m.nowPlayingOpen {
+				tabs := []string{"lyrics", "related", "queue"}
+				for i, t := range tabs {
+					if m.nowPlayingTab == t || (m.nowPlayingTab == "" && i == 0) {
+						m.nowPlayingTab = tabs[(i-1+len(tabs))%len(tabs)]
+						m.setMainContent()
+						return m, nil
+					}
+				}
+			}
 			if !m.showQueuePanel() {
 				return m, nil
 			}
@@ -978,7 +1006,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.enqueueNowPlayingImage())
 			}
 		}
+		if msg.Song.RelatedBrowseID != "" {
+			m.relatedTracksVideoID = msg.VideoID
+			m.relatedTracks = nil
+			m.relatedTracksErr = ""
+			m.relatedTracksLoading = true
+			m.relatedTracksGen++
+			cmds = append(cmds, fetchRelatedTracks(m.ytmapiClient, msg.Song.RelatedBrowseID, msg.VideoID, m.relatedTracksGen))
+		}
 		return m, tea.Batch(cmds...)
+	case RelatedTracksMsg:
+		if msg.Gen != 0 && msg.Gen != m.relatedTracksGen {
+			return m, nil
+		}
+		if m.currentTrack == nil || msg.VideoID != m.currentTrack.VideoID {
+			return m, nil
+		}
+		m.relatedTracksLoading = false
+		if msg.Err != nil {
+			m.relatedTracksErr = "Related tracks unavailable"
+			m.relatedTracks = nil
+			return m, nil
+		}
+		m.relatedTracksErr = ""
+		m.relatedTracks = msg.Sections
+		m.hydrateRelatedViewport()
+		if m.nowPlayingOpen {
+			m.setMainContent()
+		}
+		return m, m.enqueueVisibleImages(m.mainWidth())
 	case LyricsMsg:
 		if msg.Gen != 0 && msg.Gen != m.lyricsGen {
 			return m, nil
@@ -1912,6 +1968,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if mm, cmd, handled := m.handleLyricsWheel(mouseMsg); handled {
 			return mm, cmd
 		}
+		if mm, cmd, handled := m.handleRelatedWheel(mouseMsg); handled {
+			return mm, cmd
+		}
 
 		// Ignore pure motion events unless we are actively scrubbing
 		isMotion := mouseMsg.Action == tea.MouseActionMotion
@@ -2214,6 +2273,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.setMainContent()
 					return m, m.enqueueVisibleImages(m.mainWidth())
+				}
+			}
+
+			if m.nowPlayingOpen && m.nowPlayingTab == "related" {
+				for _, sec := range m.relatedTracks {
+					title := sec.Title
+					if m.zone.Get(title + "_left").InBounds(mouseMsg) {
+						if m.carouselOffsets[title] > 0 {
+							m.carouselOffsets[title]--
+						}
+						m.hydrateRelatedViewport()
+						return m, m.enqueueVisibleImages(m.mainWidth())
+					}
+
+					if m.zone.Get(title + "_right").InBounds(mouseMsg) {
+						maxLen := len(sec.Contents)
+						if m.carouselOffsets[title] < maxLen-1 {
+							m.carouselOffsets[title]++
+						}
+						m.hydrateRelatedViewport()
+						return m, m.enqueueVisibleImages(m.mainWidth())
+					}
 				}
 			}
 

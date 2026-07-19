@@ -636,6 +636,26 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 		return m.dispatchZone(zid, res.Title, firstArtist(res), thumbURL(res.Thumbnails))
 	}
 
+	if m.nowPlayingOpen && m.nowPlayingTab == "related" {
+		for _, sec := range m.relatedTracks {
+			for _, card := range sec.Contents {
+				zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID)
+				if zid == "" || !m.zone.Get(zid).InBounds(mouse) {
+					continue
+				}
+				artist := ""
+				if len(card.Artists) > 0 {
+					artist = card.Artists[0].Name
+				}
+				thumb := ""
+				if len(card.Thumbnails) > 0 {
+					thumb = card.Thumbnails[0].URL
+				}
+				return m.dispatchZone(zid, card.Title, artist, thumb)
+			}
+		}
+	}
+
 	// Home carousels
 	for _, carousel := range m.homeCarousels {
 		for _, card := range carousel.Contents {
