@@ -151,9 +151,155 @@ func (m Model) renderNowPlayingRightPane(width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, body)
 }
 
+func (m *Model) hydrateRelatedViewport() {
+	if m.relatedTracksLoading {
+		hint := lipgloss.NewStyle().Foreground(colorSubtext).Render("Loading related content…")
+		m.relatedViewport.SetContent(lipgloss.NewStyle().Padding(2).Render(hint))
+		return
+	}
+	if m.relatedTracksErr != "" {
+		m.relatedViewport.SetContent(lipgloss.NewStyle().Padding(2).Foreground(colorSubtext).Render(m.relatedTracksErr))
+		return
+	}
+	if len(m.relatedTracks) == 0 {
+		hint := lipgloss.NewStyle().Foreground(colorSubtext).Render("No related content available.")
+		m.relatedViewport.SetContent(lipgloss.NewStyle().Padding(2).Render(hint))
+		return
+	}
+
+	var sb strings.Builder
+	for i, sec := range m.relatedTracks {
+		if len(sec.Contents) == 0 {
+			continue
+		}
+		sb.WriteString(m.renderRelatedCarouselRow(i+1000, sec.Title, sec.Contents, m.relatedViewport.Width))
+		sb.WriteString("\n")
+	}
+	m.relatedViewport.SetContent(sb.String())
+}
+
 func (m Model) renderRelatedPaneBody(width, height int) string {
-	hint := lipgloss.NewStyle().Foreground(colorSubtext).Render("Related tracks & radio coming soon...")
-	return lipgloss.NewStyle().Padding(2).Render(hint)
+	m.relatedViewport.Width = width
+	m.relatedViewport.Height = height
+	return m.zone.Mark("related_pane", safeViewportView(&m.relatedViewport))
+}
+
+func (m Model) renderRelatedCarouselRow(index int, title string, cards []ytmapi.HomeCarouselItem, mainWidth int) string {
+	var row strings.Builder
+
+	contentWidth := mainWidth - 2
+	maxVisible := 4
+
+	// Calculate a dynamic card width so 4 items fit exactly
+	cardWidth := contentWidth / maxVisible
+	if cardWidth < 12 {
+		cardWidth = 12
+	}
+
+	isActive := m.activePane == PaneMain && m.activeCarousel == index
+
+	titleStyle := lipgloss.NewStyle().Bold(true)
+	btnStyle := lipgloss.NewStyle().Background(colorHover).Foreground(colorText).Padding(0, 2)
+
+	if isActive {
+		titleStyle = titleStyle.Foreground(colorText)
+		btnStyle = btnStyle.Background(colorSearchBg).Foreground(colorText)
+	} else {
+		titleStyle = titleStyle.Foreground(colorSubtext)
+		btnStyle = btnStyle.Background(colorBg).Foreground(colorSubtext)
+	}
+
+	titleStr := titleStyle.Render(title)
+	leftBtn := m.zone.Mark(title+"_left", btnStyle.Render("<"))
+	rightBtn := m.zone.Mark(title+"_right", btnStyle.Render(">"))
+	arrows := lipgloss.JoinHorizontal(lipgloss.Top, leftBtn, " ", rightBtn)
+
+	// ensure arrows align to the right edge exactly
+	space := contentWidth - lipgloss.Width(titleStr) - lipgloss.Width(arrows)
+	if space < 1 {
+		space = 1
+	}
+	
+	row.WriteString(titleStr)
+	row.WriteString(strings.Repeat(" ", space))
+	row.WriteString(arrows)
+	row.WriteString("\n\n")
+
+	offset := m.carouselOffsets[title]
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(cards) {
+		offset = len(cards)
+	}
+	visibleCards := cards[offset:]
+	if len(visibleCards) > maxVisible {
+		visibleCards = visibleCards[:maxVisible]
+	}
+
+	var blocks []string
+	for vi, card := range visibleCards {
+		cardIndex := offset + vi
+		t := card.Title
+		
+		// Use almost full cardWidth for art to minimize gaps
+		cArtWidth := cardWidth - 2
+		cArtHeight := cArtWidth / 2
+		if cArtWidth < 4 {
+			cArtWidth = 4
+		}
+		if cArtHeight < 2 {
+			cArtHeight = 2
+		}
+
+		maxLen := cArtWidth
+		if maxLen < 3 {
+			maxLen = 3
+		}
+		
+		if len(t) > maxLen {
+			t = t[:maxLen-3] + "..."
+		}
+		if card.IsExplicit {
+			t += explicitBadge() 
+		}
+		
+		s := homeCardSubtitle(card)
+		if len(s) > maxLen+2 && maxLen+2 > 3 {
+			s = s[:maxLen-1] + "..."
+		}
+
+		art := lipgloss.NewStyle().Width(cArtWidth).Height(cArtHeight).Render("")
+		if len(card.Thumbnails) > 0 {
+			art = m.cachedArtAt(card.Thumbnails[0].URL, cArtWidth, cArtHeight)
+		}
+
+		titleColor := colorText
+		focused := m.focusedHomeCard(index, cardIndex)
+		if focused {
+			titleColor = colorAccent
+		}
+
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			art, "",
+			lipgloss.NewStyle().Bold(true).Foreground(titleColor).Render(t),
+			lipgloss.NewStyle().Foreground(colorSubtext).Render(s),
+		)
+
+		if zid := entityZoneID(card.VideoID, card.BrowseID, card.PlaylistID); zid != "" {
+			content = m.zone.Mark(zid, content)
+		}
+
+		// Use minimal gap between items (MarginRight 1)
+		style := lipgloss.NewStyle().MarginRight(1).Width(cardWidth - 1)
+		if focused {
+			content = lipgloss.NewStyle().Background(colorFocusBg).Render(content)
+		}
+		blocks = append(blocks, style.Render(content))
+	}
+
+	row.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
+	return row.String() + "\n\n\n"
 }
 
 func (m Model) lyricsHeaderLabel() string {
@@ -444,6 +590,20 @@ func (m Model) handleLyricsClick(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
+// handleRelatedWheel scrolls the related pane when the pointer is over it.
+func (m Model) handleRelatedWheel(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
+	if !m.nowPlayingOpen || m.nowPlayingTab != "related" || !tea.MouseEvent(msg).IsWheel() {
+		return m, nil, false
+	}
+	z := m.zone.Get("related_pane")
+	if z == nil || z.IsZero() || !z.InBounds(msg) {
+		return m, nil, false
+	}
+	var cmd tea.Cmd
+	m.relatedViewport, cmd = m.relatedViewport.Update(msg)
+	return m, cmd, true
+}
+
 // handleLyricsWheel scrolls lyrics when the pointer is over the lyrics pane.
 func (m Model) handleLyricsWheel(msg tea.MouseMsg) (Model, tea.Cmd, bool) {
 	if !m.nowPlayingOpen || !tea.MouseEvent(msg).IsWheel() {
@@ -518,10 +678,15 @@ func (m *Model) ensureNowPlayingLayout() {
 	if w >= npMinWide {
 		m.lyricsViewport.Width = max(24, w/2-4)
 		m.lyricsViewport.Height = bodyH
+		m.relatedViewport.Width = m.lyricsViewport.Width
+		m.relatedViewport.Height = bodyH
 	} else {
 		m.lyricsViewport.Width = max(8, w-4)
 		m.lyricsViewport.Height = max(3, h/2-3)
+		m.relatedViewport.Width = m.lyricsViewport.Width
+		m.relatedViewport.Height = m.lyricsViewport.Height
 	}
+	m.hydrateRelatedViewport()
 }
 
 func (m *Model) enqueueNowPlayingImage() tea.Cmd {
