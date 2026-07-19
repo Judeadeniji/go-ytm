@@ -34,9 +34,9 @@ build:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build $(BUILD_FLAGS) -o $(OUTPUT) $(ENTRY)
 
 # Dev run: Go owns ytm-api; YTM_DEV points API home at ./ytm-api
-run: build
+run:
 	@chmod +x scripts/run.sh
-	@./scripts/run.sh ./$(OUTPUT)
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) ./scripts/run.sh $(GO) run $(BUILD_FLAGS) $(ENTRY)
 
 api-stop:
 	@if [ -f "$${XDG_STATE_HOME:-$$HOME/.local/state}/go-ytm/ytm-api.pid" ]; then \

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${1:-$ROOT/bin/ytm}"
+
 
 export YTM_DEV=1
 export PATH="${HOME}/.local/bin:${ROOT}/bin:${PATH}"
@@ -27,10 +27,15 @@ if ! command -v yt-dlp >/dev/null 2>&1; then
 	echo "warning: yt-dlp not found — optional fallback for some tracks" >&2
 fi
 
-if [[ ! -x "$BIN" ]]; then
-	echo "error: binary not found: $BIN (run make build first)" >&2
-	exit 1
+if [[ $# -eq 0 ]]; then
+	CMD=("$ROOT/bin/ytm")
+	if [[ ! -x "${CMD[0]}" ]]; then
+		echo "error: binary not found: ${CMD[0]} (run make build first)" >&2
+		exit 1
+	fi
+else
+	CMD=("$@")
 fi
 
-echo "==> Starting ${BIN##*/} (API supervised by Go)..."
-exec "$BIN"
+echo "==> Starting ${CMD[*]} (API supervised by Go)..."
+exec "${CMD[@]}"
