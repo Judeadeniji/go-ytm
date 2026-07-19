@@ -277,3 +277,27 @@ type ChartsData struct {
 	Daily     []HomeCarouselItem `json:"daily,omitempty"`
 	Weekly    []HomeCarouselItem `json:"weekly,omitempty"`
 }
+
+
+func (s *SearchResult) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	type alias SearchResult
+	var tmp alias
+	_ = json.Unmarshal(b, &tmp)
+	*s = SearchResult(tmp)
+	return nil
+}
+
+
+func (s *SearchSuggestionItem) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	type alias SearchSuggestionItem
+	var tmp alias
+	_ = json.Unmarshal(b, &tmp)
+	*s = SearchSuggestionItem(tmp)
+	return nil
+}
