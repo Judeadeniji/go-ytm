@@ -676,7 +676,15 @@ func (m *Model) ensureNowPlayingLayout() {
 	// Match renderLyricsPane body height: pane ≈ h-2, then −header/blank/hint.
 	bodyH := max(3, h-5)
 	if w >= npMinWide {
-		m.lyricsViewport.Width = max(24, w/2-4)
+		leftW := npArtWidth + 6
+		if leftW > w/2 {
+			leftW = w / 2
+		}
+		rightW := w - leftW - 2
+		if rightW < 24 {
+			rightW = 24
+		}
+		m.lyricsViewport.Width = rightW - 2
 		m.lyricsViewport.Height = bodyH
 		m.relatedViewport.Width = m.lyricsViewport.Width
 		m.relatedViewport.Height = bodyH
