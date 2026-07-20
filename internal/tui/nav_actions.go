@@ -480,7 +480,7 @@ func titleCase(s string) string {
 // handleZoneClick dispatches clicks for play_* / open_* / search_filter_* zones.
 func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 	// Search filter chips
-	for _, f := range []string{"", "songs", "albums", "artists", "playlists"} {
+	for _, f := range []string{"", "songs", "albums", "artists", "playlists", "podcasts", "profiles"} {
 		if m.zone.Get("search_filter_"+f).InBounds(mouse) {
 			m.searchFilter = f
 			q := m.searchInput.Value()

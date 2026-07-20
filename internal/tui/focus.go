@@ -14,6 +14,8 @@ const (
 	screenArtist
 	screenAlbum
 	screenPlaylist
+	screenPodcast
+	screenProfile
 	screenExplore
 	screenLibrary
 	screenOther
@@ -28,6 +30,10 @@ func (m Model) currentScreen() screenKind {
 			return screenAlbum
 		case ScreenPlaylist:
 			return screenPlaylist
+		case ScreenPodcast:
+			return screenPodcast
+		case ScreenProfile:
+			return screenProfile
 		case ScreenSearch:
 			return screenSearch
 		}
@@ -76,6 +82,23 @@ func (m Model) artistFocusItems() []artistFocusItem {
 	if a.Singles != nil { add("album", "Singles & EPs", a.Singles.Results) }
 	if a.Videos != nil { add("video", "Videos", a.Videos.Results) }
 	if a.Related != nil { add("related", "Fans Also Like", a.Related.Results) }
+	return out
+}
+
+func (m Model) profileFocusItems() []artistFocusItem {
+	if m.userPage == nil {
+		return nil
+	}
+	u := m.userPage
+	var out []artistFocusItem
+	add := func(kind, title string, results []map[string]any) {
+		for _, item := range results {
+			if artistItemZone(kind, item) == "" { continue }
+			out = append(out, artistFocusItem{Kind: kind, Title: title, Item: item})
+		}
+	}
+	if u.Playlists != nil { add("playlists", "Playlists", u.Playlists.Results) }
+	if u.Videos != nil { add("videos", "Videos", u.Videos.Results) }
 	return out
 }
 
@@ -158,7 +181,7 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 
 	// PaneMain (and default)
 	switch m.currentScreen() {
-	case screenAlbum, screenPlaylist:
+	case screenAlbum, screenPlaylist, screenPodcast:
 		return m.moveTrackCursor(delta), true
 
 	case screenSearch:
@@ -178,6 +201,16 @@ func (m Model) moveListFocus(delta int) (Model, bool) {
 		}
 		m.listCursor = clampIndex(m.listCursor+delta, len(items))
 		m.ensureArtistCarouselCursorVisible(items)
+		m.setMainContent()
+		m.ensureListCursorInView(6, 1)
+		return m, true
+
+	case screenProfile:
+		items := m.profileFocusItems()
+		if len(items) == 0 {
+			return m, false
+		}
+		m.listCursor = clampIndex(m.listCursor+delta, len(items))
 		m.setMainContent()
 		m.ensureListCursorInView(6, 1)
 		return m, true
@@ -490,7 +523,7 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 	}
 
 	switch m.currentScreen() {
-	case screenAlbum, screenPlaylist:
+	case screenAlbum, screenPlaylist, screenPodcast:
 		return m.playFocusedTrack()
 
 	case screenSearch:
@@ -506,8 +539,13 @@ func (m Model) activateFocused() (Model, tea.Cmd) {
 		mm, cmd, _ := m.dispatchZone(zid, res.Title, firstArtist(res), thumbURL(res.Thumbnails))
 		return mm, cmd
 
-	case screenArtist:
-		items := m.artistFocusItems()
+	case screenArtist, screenProfile:
+		var items []artistFocusItem
+		if m.currentScreen() == screenProfile {
+			items = m.profileFocusItems()
+		} else {
+			items = m.artistFocusItems()
+		}
 		if m.listCursor < 0 || m.listCursor >= len(items) {
 			return m, nil
 		}

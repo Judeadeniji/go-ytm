@@ -24,7 +24,7 @@ func (m Model) onTracklistScreen() bool {
 	if !ok {
 		return false
 	}
-	return sc.Kind == ScreenPlaylist || sc.Kind == ScreenAlbum
+	return sc.Kind == ScreenPlaylist || sc.Kind == ScreenAlbum || sc.Kind == ScreenPodcast
 }
 
 func (m Model) tracklistTracks() []ytmapi.TrackItem {
@@ -43,6 +43,11 @@ func (m Model) tracklistTracks() []ytmapi.TrackItem {
 			return nil
 		}
 		return playableTracks(m.albumPage.Tracks)
+	case ScreenPodcast:
+		if m.podcastPage == nil {
+			return nil
+		}
+		return playableTracks(m.podcastPage.Episodes)
 	}
 	return nil
 }
