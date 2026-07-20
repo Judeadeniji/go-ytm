@@ -516,9 +516,26 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 				prefix = "› "
 			}
 
-			sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(strings.Join(subParts, " · "))
-			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(prefix + title)
-			row := lipgloss.JoinVertical(lipgloss.Left, titleStyled, lipgloss.NewStyle().Background(bg).Render("  "+sub))
+			subStr := strings.Join(subParts, " · ")
+			subWidth := mainWidth - sugArtWidth - 10
+			if subWidth < 10 {
+				subWidth = 10
+			}
+			sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).MaxWidth(subWidth).Render(subStr)
+			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).MaxWidth(subWidth).Render(title)
+			info := lipgloss.JoinVertical(lipgloss.Left, titleStyled, sub)
+			
+			// Center the text vertically relative to the 3-line tall thumbnail
+			infoPadded := lipgloss.NewStyle().PaddingTop(1).Background(bg).Render(info)
+
+			thumbURL := ""
+			if len(res.Thumbnails) > 0 {
+				thumbURL = res.Thumbnails[0].URL
+			}
+			art := lipgloss.NewStyle().Background(bg).Render(m.cachedArtAt(thumbURL, sugArtWidth, sugArtHeight))
+			prefixStyled := lipgloss.NewStyle().Background(bg).PaddingTop(1).Render(prefix)
+
+			row := lipgloss.JoinHorizontal(lipgloss.Top, prefixStyled, art, lipgloss.NewStyle().Background(bg).Render("  "), infoPadded)
 			row = lipgloss.NewStyle().Background(bg).Width(mainWidth - 4).Render(row)
 
 			zid := searchResultZone(res)
@@ -527,12 +544,12 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			}
 
 			mb.WriteString(row)
-			mb.WriteString("\n\n")
+			mb.WriteString("\n")
 		}
 		mb.WriteString("\n")
 	}
 
-	return mb.String()
+	return lipgloss.NewStyle().Padding(1, 2).Render(mb.String())
 }
 
 func searchResultZone(res ytmapi.SearchResult) string {

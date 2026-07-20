@@ -396,7 +396,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newVal := m.searchInput.Value()
 
 			if newVal != oldVal {
-				m.listCursor = 0
+				m.listCursor = -1
 				m.suggestionGen++
 				m.cancelSuggestions()
 				if strings.TrimSpace(newVal) == "" {
@@ -2662,18 +2662,15 @@ func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
 			}
 		}
 	} else if len(m.searchResults) > 0 {
-		n := 0
-		for _, res := range m.searchResults {
-			if n >= maxSearchThumbs {
+		for i, res := range m.searchResults {
+			if i >= 30 {
 				break
 			}
 			if len(res.Thumbnails) == 0 {
 				continue
 			}
-			if res.Category == "Top result" || n == 0 {
-				queue(res.Thumbnails[0].URL, artWidth, artHeight)
-				n++
-			}
+			// Use the same art size as suggestions for a uniform list
+			queue(res.Thumbnails[0].URL, sugArtWidth, sugArtHeight)
 		}
 	} else if m.activeMenu == "Explore" {
 		contentWidth := mainWidth - 2

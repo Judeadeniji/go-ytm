@@ -731,7 +731,12 @@ func (m Model) moveSuggestionFocus(delta int) Model {
 	if len(m.searchSuggestions) == 0 {
 		return m
 	}
-	m.listCursor = clampIndex(m.listCursor+delta, len(m.searchSuggestions))
+	m.listCursor += delta
+	if m.listCursor < -1 {
+		m.listCursor = -1
+	} else if m.listCursor >= len(m.searchSuggestions) {
+		m.listCursor = len(m.searchSuggestions) - 1
+	}
 	return m
 }
 
