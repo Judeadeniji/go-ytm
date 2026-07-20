@@ -12,6 +12,20 @@ router = APIRouter(tags=["catalog"])
 
 
 # ---------------------------------------------------------------------------
+# Transcript
+# ---------------------------------------------------------------------------
+
+@router.get("/transcript/{video_id}")
+def transcript(video_id: str):
+    """Fetch transcript using youtube-transcript-api."""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        return {"transcript": transcript_list}
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Transcript not found or unavailable: {exc}")
+
+# ---------------------------------------------------------------------------
 # Artist
 # ---------------------------------------------------------------------------
 

@@ -784,7 +784,7 @@ func (m *Model) ensureLyricsFetched() tea.Cmd {
 	return fetchLyrics(
 		m.lyricsClient,
 		m.sessionStore,
-		m.extractor,
+		m.ytmapiClient,
 		m.currentTrack.VideoID,
 		key,
 		m.currentTrack.Title,

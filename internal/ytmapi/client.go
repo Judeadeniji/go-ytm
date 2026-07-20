@@ -213,6 +213,14 @@ func (c *Client) GetAlbum(ctx context.Context, browseID string) (*AlbumPage, err
 	return &data, nil
 }
 
+func (c *Client) GetTranscript(ctx context.Context, videoID string) ([]TranscriptSegment, error) {
+	var data TranscriptResponse
+	if err := c.getJSON(ctx, "/transcript/"+url.PathEscape(videoID), &data); err != nil {
+		return nil, err
+	}
+	return data.Transcript, nil
+}
+
 type albumBrowseIDResponse struct {
 	BrowseID string `json:"browseId"`
 }

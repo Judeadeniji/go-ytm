@@ -275,7 +275,7 @@ func fetchSongDetails(api *ytmapi.Client, videoID string, gen int, ctx context.C
 	}
 }
 
-func fetchLyrics(client *lyrics.Client, db *library.DB, extractor *search.Extractor, videoID, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
+func fetchLyrics(client *lyrics.Client, db *library.DB, ytmClient *ytmapi.Client, videoID, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		if ctx == nil {
 			ctx = context.Background()
@@ -307,14 +307,14 @@ func fetchLyrics(client *lyrics.Client, db *library.DB, extractor *search.Extrac
 		res, err := client.FetchForTrack(ctx, title, artist, album, durationSec)
 		if err != nil {
 			// 2.5 Try YouTube transcript fallback (for podcasts/episodes)
-			if extractor != nil && videoID != "" {
-				tr, trErr := extractor.GetTranscript(ctx, videoID)
+			if ytmClient != nil && videoID != "" {
+				tr, trErr := ytmClient.GetTranscript(ctx, videoID)
 				if trErr == nil && len(tr) > 0 {
 					var lines []lyrics.Line
 					var plain strings.Builder
 					var lrc strings.Builder
 					for _, seg := range tr {
-						d := time.Duration(seg.StartMs) * time.Millisecond
+						d := time.Duration(seg.Start * float64(time.Second))
 						m := int(d.Minutes())
 						s := int(d.Seconds()) % 60
 						ms := int(d.Milliseconds()) % 1000 / 10

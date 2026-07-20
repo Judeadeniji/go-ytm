@@ -58,6 +58,16 @@ type SuggestionRun struct {
 	Bold bool   `json:"bold,omitempty"`
 }
 
+type TranscriptSegment struct {
+	Text     string  `json:"text"`
+	Start    float64 `json:"start"`
+	Duration float64 `json:"duration"`
+}
+
+type TranscriptResponse struct {
+	Transcript []TranscriptSegment `json:"transcript"`
+}
+
 type HomeCarouselItem struct {
 	ZoneID      string      `json:"-"`
 	Title       string      `json:"title"`
