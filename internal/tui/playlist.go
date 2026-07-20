@@ -120,10 +120,29 @@ func (m Model) generatePodcastContent(mainWidth int) string {
 		desc = lipgloss.NewStyle().Foreground(colorSubtext).Width(infoW).Render(desc)
 	}
 
-	info := lipgloss.JoinVertical(lipgloss.Left, badge, "", title, "", meta, "", desc, "", hints)
-	header := lipgloss.JoinHorizontal(lipgloss.Top, cover, "    ", info)
-	sb.WriteString(lipgloss.NewStyle().Padding(2, 2, 2, 4).Render(header))
+	parts := []string{
+		lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", badge),
+		"",
+		meta,
+	}
+	if desc != "" {
+		parts = append(parts, "", desc)
+	}
+	parts = append(parts, "", hints)
+
+	info := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	info = lipgloss.NewStyle().Width(infoW).Render(info)
+
+	header := lipgloss.JoinHorizontal(lipgloss.Top, cover, "   ", info)
+	sb.WriteString(header)
 	sb.WriteString("\n\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat("─", max(10, mainWidth-4))))
+	sb.WriteString("\n\n")
+
+	if len(tracks) == 0 {
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("No playable episodes."))
+		return sb.String()
+	}
 
 	// —— Tracklist ——
 	viewsW := tracklistViewsWidth(tracks)
