@@ -282,3 +282,77 @@ func artistItemZone(kind string, item map[string]any) string {
 	}
 	return ""
 }
+
+func (m Model) generateProfileContent(mainWidth int) string {
+	if m.userPage == nil {
+		return "Loading profile…"
+	}
+	u := m.userPage
+	var sb strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorText)
+	title := titleStyle.Render(u.Name)
+
+	badge := lipgloss.NewStyle().
+		Background(colorSearchBg).Foreground(colorSubtext).
+		Padding(0, 1).Render("PROFILE")
+
+	header := lipgloss.JoinVertical(lipgloss.Left, badge, "", title)
+	sb.WriteString(lipgloss.NewStyle().Padding(1, 2).Render(header))
+	sb.WriteString("\n\n")
+
+	var flatList []any
+	if u.Playlists != nil {
+		flatList = append(flatList, "Playlists")
+		for _, item := range u.Playlists.Results {
+			flatList = append(flatList, item)
+		}
+	}
+	if u.Videos != nil {
+		flatList = append(flatList, "Videos")
+		for _, item := range u.Videos.Results {
+			flatList = append(flatList, item)
+		}
+	}
+
+	for i, item := range flatList {
+		switch v := item.(type) {
+		case string:
+			sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Padding(1, 2).Render(v))
+			sb.WriteString("\n")
+		case map[string]any:
+			focused := m.listCursor == i
+			bg := colorBg
+			titleColor := colorText
+			prefix := "  "
+			if focused {
+				bg = colorFocusBg
+				titleColor = colorAccent
+				prefix = "› "
+			}
+
+			titleStr := mapStr(v, "title")
+			subParts := []string{}
+			if s := mapStr(v, "author"); s != "" {
+				subParts = append(subParts, s)
+			} else if s := mapStr(v, "views"); s != "" {
+				subParts = append(subParts, s)
+			}
+			
+			sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(strings.Join(subParts, " · "))
+			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(prefix + titleStr)
+			row := lipgloss.JoinVertical(lipgloss.Left, titleStyled, lipgloss.NewStyle().Background(bg).Render("  "+sub))
+			row = lipgloss.NewStyle().Background(bg).Width(mainWidth - 4).Render(row)
+
+			zid := artistItemZone("playlists", v)
+			if zid != "" {
+				row = m.zone.Mark(zid, row)
+			}
+
+			sb.WriteString(row)
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
+}

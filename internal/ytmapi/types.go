@@ -301,3 +301,20 @@ func (s *SearchSuggestionItem) UnmarshalJSON(b []byte) error {
 	*s = SearchSuggestionItem(tmp)
 	return nil
 }
+
+// PodcastPage is the get_podcast response.
+type PodcastPage struct {
+	Title       string      `json:"title"`
+	Description string      `json:"description,omitempty"`
+	Author      NamedRef    `json:"author"`
+	Saved       bool        `json:"saved,omitempty"`
+	Thumbnails  []Thumbnail `json:"thumbnails,omitempty"`
+	Episodes    []TrackItem `json:"episodes,omitempty"`
+}
+
+// UserPage is the get_user response.
+type UserPage struct {
+	Name      string         `json:"name"`
+	Playlists *ArtistSection `json:"playlists,omitempty"`
+	Videos    *ArtistSection `json:"videos,omitempty"`
+}

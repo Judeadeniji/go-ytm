@@ -27,6 +27,10 @@ func (m Model) generateMainContent(mainWidth int) string {
 			return m.generateAlbumContent(mainWidth)
 		case ScreenPlaylist:
 			return m.generatePlaylistContent(mainWidth)
+		case ScreenPodcast:
+			return m.generatePodcastContent(mainWidth)
+		case ScreenProfile:
+			return m.generateProfileContent(mainWidth)
 		case ScreenSearch:
 			return m.generateSearchResultsContent(mainWidth)
 		}
@@ -416,6 +420,8 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 		{"Albums", "albums"},
 		{"Artists", "artists"},
 		{"Playlists", "playlists"},
+		{"Podcasts", "podcasts"},
+		{"Profiles", "profiles"},
 	}
 	var chips []string
 	for _, cf := range chipFilters {
@@ -542,6 +548,14 @@ func searchResultZone(res ytmapi.SearchResult) string {
 	case "artist":
 		if browseID != "" {
 			return "open_artist_" + browseID
+		}
+	case "profile":
+		if browseID != "" {
+			return "open_profile_" + browseID
+		}
+	case "podcast":
+		if browseID != "" {
+			return "open_podcast_" + browseID
 		}
 	case "album":
 		if browseID != "" {

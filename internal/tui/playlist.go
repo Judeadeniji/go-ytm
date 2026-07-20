@@ -79,3 +79,58 @@ func (m Model) generatePlaylistContent(mainWidth int) string {
 
 	return sb.String()
 }
+
+func (m Model) generatePodcastContent(mainWidth int) string {
+	if m.podcastPage == nil {
+		return lipgloss.NewStyle().Foreground(colorSubtext).Padding(2).Render("Loading podcast…")
+	}
+	p := m.podcastPage
+	tracks := playableTracks(p.Episodes)
+	var sb strings.Builder
+
+	// —— Header: cover + meta ——
+	coverURL := firstThumbURL(p.Thumbnails)
+	cover := m.cachedArtAt(coverURL, coverWidth, coverHeight)
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(p.Title)
+	badge := lipgloss.NewStyle().
+		Background(colorSearchBg).Foreground(colorSubtext).
+		Padding(0, 1).Render("PODCAST")
+
+	metaParts := []string{}
+	if p.Author.Name != "" {
+		metaParts = append(metaParts, p.Author.Name)
+	}
+	if len(tracks) > 0 {
+		metaParts = append(metaParts, pluralCount(len(tracks), "episode", "episodes"))
+	}
+	meta := lipgloss.NewStyle().Foreground(colorSubtext).Render(strings.Join(metaParts, "  ·  "))
+
+	hints := lipgloss.NewStyle().Foreground(colorDivider).Render("↑/↓ or j/k move  ·  enter play  ·  esc back")
+
+	infoW := mainWidth - coverWidth - 6
+	if infoW < 20 {
+		infoW = 20
+	}
+	desc := p.Description
+	if desc != "" {
+		if len(desc) > 280 {
+			desc = desc[:277] + "..."
+		}
+		desc = lipgloss.NewStyle().Foreground(colorSubtext).Width(infoW).Render(desc)
+	}
+
+	info := lipgloss.JoinVertical(lipgloss.Left, badge, "", title, "", meta, "", desc, "", hints)
+	header := lipgloss.JoinHorizontal(lipgloss.Top, cover, "    ", info)
+	sb.WriteString(lipgloss.NewStyle().Padding(2, 2, 2, 4).Render(header))
+	sb.WriteString("\n\n")
+
+	// —— Tracklist ——
+	viewsW := tracklistViewsWidth(tracks)
+	for i, tr := range tracks {
+		focused := i == m.trackCursor
+		sb.WriteString(m.renderTrackRow(i, tr, mainWidth, focused, viewsW))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}

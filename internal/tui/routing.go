@@ -240,3 +240,37 @@ func fetchCharts(api *ytmapi.Client, country string, gen int, ctx context.Contex
 		return ChartsMsg{Data: data, Country: country, Gen: gen, Err: err}
 	}
 }
+
+type PodcastMsg struct {
+	Page     *ytmapi.PodcastPage
+	BrowseID string
+	Gen      int
+	Err      error
+}
+
+func fetchPodcast(api *ytmapi.Client, browseID string, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		page, err := api.GetPodcast(ctx, browseID)
+		return PodcastMsg{Page: page, BrowseID: browseID, Gen: gen, Err: err}
+	}
+}
+
+type UserMsg struct {
+	Page      *ytmapi.UserPage
+	ChannelID string
+	Gen       int
+	Err       error
+}
+
+func fetchUser(api *ytmapi.Client, channelID string, gen int, ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		page, err := api.GetUser(ctx, channelID)
+		return UserMsg{Page: page, ChannelID: channelID, Gen: gen, Err: err}
+	}
+}

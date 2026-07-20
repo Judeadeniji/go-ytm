@@ -114,6 +114,30 @@ func (m Model) openAlbum(browseID string) (Model, tea.Cmd) {
 	return m, fetchAlbum(m.ytmapiClient, browseID, m.navGen, m.navCtx)
 }
 
+func (m Model) openPodcast(browseID string) (Model, tea.Cmd) {
+	m = m.beginOpen("Loading podcast…")
+	if cached, ok := m.pageCache["podcast_"+browseID].(*ytmapi.PodcastPage); ok {
+		m.podcastPage = cached
+		m.pageLoading = false
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenPodcast, ID: browseID, Title: cached.Title})
+		m.setStatus("Updating " + cached.Title + "...")
+		m.setMainContent()
+	}
+	return m, fetchPodcast(m.ytmapiClient, browseID, m.navGen, m.navCtx)
+}
+
+func (m Model) openProfile(channelID string) (Model, tea.Cmd) {
+	m = m.beginOpen("Loading profile…")
+	if cached, ok := m.pageCache["profile_"+channelID].(*ytmapi.UserPage); ok {
+		m.userPage = cached
+		m.pageLoading = false
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenProfile, ID: channelID, Title: cached.Name})
+		m.setStatus("Updating " + cached.Name + "...")
+		m.setMainContent()
+	}
+	return m, fetchUser(m.ytmapiClient, channelID, m.navGen, m.navCtx)
+}
+
 func (m Model) openOlak(audioPlaylistID string) (Model, tea.Cmd) {
 	m = m.beginOpen("Loading album…")
 	return m, fetchAlbumFromAudioPlaylist(m.ytmapiClient, audioPlaylistID, m.navGen, m.navCtx)
@@ -718,6 +742,14 @@ func (m Model) dispatchZone(zid, title, artist, thumb string) (Model, tea.Cmd, b
 		id := strings.TrimPrefix(zid, "open_artist_")
 		mm, cmd := m.openArtist(id)
 		return mm, cmd, true
+	case strings.HasPrefix(zid, "open_profile_"):
+		id := strings.TrimPrefix(zid, "open_profile_")
+		mm, cmd := m.openProfile(id)
+		return mm, cmd, true
+	case strings.HasPrefix(zid, "open_podcast_"):
+		id := strings.TrimPrefix(zid, "open_podcast_")
+		mm, cmd := m.openPodcast(id)
+		return mm, cmd, true
 	case strings.HasPrefix(zid, "open_album_"):
 		id := strings.TrimPrefix(zid, "open_album_")
 		mm, cmd := m.openAlbum(id)
@@ -738,6 +770,10 @@ func (m Model) dispatchZone(zid, title, artist, thumb string) (Model, tea.Cmd, b
 		}
 		if strings.HasPrefix(id, "MPRE") {
 			mm, cmd := m.openAlbum(id)
+			return mm, cmd, true
+		}
+		if strings.HasPrefix(id, "MPSPPL") {
+			mm, cmd := m.openPodcast(id)
 			return mm, cmd, true
 		}
 		mm, cmd := m.openPlaylist(id, title, artist)

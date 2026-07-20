@@ -587,3 +587,19 @@ func (c *Client) GetProfile(ctx context.Context) (*UserProfile, error) {
 	}
 	return &data, nil
 }
+
+func (c *Client) GetPodcast(ctx context.Context, browseID string) (*PodcastPage, error) {
+	var data PodcastPage
+	if err := c.getJSON(ctx, "/podcast/"+browseID, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+func (c *Client) GetUser(ctx context.Context, channelID string) (*UserPage, error) {
+	var data UserPage
+	if err := c.getJSON(ctx, "/user/"+channelID, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}

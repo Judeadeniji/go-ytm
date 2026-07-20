@@ -154,6 +154,8 @@ type Model struct {
 	artistPage     *ytmapi.ArtistPage
 	albumPage      *ytmapi.AlbumPage
 	playlistPage   *ytmapi.PlaylistPage
+	podcastPage    *ytmapi.PodcastPage
+	userPage       *ytmapi.UserPage
 	pageCache      map[string]any
 	trackCursor    int // focus index within playlist/album tracklist
 	listCursor     int // search / artist / sidebar / suggestions
@@ -1536,6 +1538,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pageErr = ""
 
 		m.stack.ReplaceOrPush(Screen{Kind: ScreenArtist, ID: id, Title: msg.Page.Name})
+		m.setStatus(msg.Page.Name)
+		m.markSessionDirty()
+		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+		m.mainViewport.YOffset = 0
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case PodcastMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.pageLoading = false
+		if msg.Err != nil || msg.Page == nil {
+			errStr := fmtErr(msg.Err)
+			if msg.Page == nil && msg.Err == nil {
+				errStr = "empty podcast response"
+			}
+			m.setStatus("Podcast update failed: " + errStr)
+			if m.podcastPage == nil {
+				m.pageErr = errStr
+			}
+			m.setMainContent()
+			return m, nil
+		}
+		m.pageCache["podcast_"+msg.BrowseID] = msg.Page
+		m.podcastPage = msg.Page
+		m.listCursor = 0
+		m.pageErr = ""
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenPodcast, ID: msg.BrowseID, Title: msg.Page.Title})
+		m.setStatus(msg.Page.Title)
+		m.markSessionDirty()
+		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))
+		m.mainViewport.YOffset = 0
+		return m, m.enqueueVisibleImages(m.mainWidth())
+	case UserMsg:
+		if msg.Gen != 0 && msg.Gen != m.navGen {
+			return m, nil
+		}
+		m.pageLoading = false
+		if msg.Err != nil || msg.Page == nil {
+			errStr := fmtErr(msg.Err)
+			if msg.Page == nil && msg.Err == nil {
+				errStr = "empty user response"
+			}
+			m.setStatus("Profile update failed: " + errStr)
+			if m.userPage == nil {
+				m.pageErr = errStr
+			}
+			m.setMainContent()
+			return m, nil
+		}
+		m.pageCache["profile_"+msg.ChannelID] = msg.Page
+		m.userPage = msg.Page
+		m.listCursor = 0
+		m.pageErr = ""
+		m.stack.ReplaceOrPush(Screen{Kind: ScreenProfile, ID: msg.ChannelID, Title: msg.Page.Name})
 		m.setStatus(msg.Page.Name)
 		m.markSessionDirty()
 		m.mainViewport.SetContent(m.generateMainContent(m.mainWidth()))

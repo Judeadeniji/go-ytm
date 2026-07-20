@@ -281,3 +281,41 @@ def song_related(browse_id: str):
         return deps.ytmusic.get_song_related(browse_id)
     except deps._CATCH as exc:
         raise deps._ytm_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Podcast & Profile
+# ---------------------------------------------------------------------------
+
+@router.get("/podcast/{browse_id}")
+def podcast(browse_id: str):
+    try:
+        return deps.ytmusic.get_podcast(browse_id)
+    except deps._CATCH as exc:
+        raise deps._ytm_error(exc) from exc
+
+@router.get("/user/{channel_id}")
+def user_profile(channel_id: str):
+    try:
+        return deps.ytmusic.get_user(channel_id)
+    except deps._CATCH as exc:
+        raise deps._ytm_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Podcast & Profile
+# ---------------------------------------------------------------------------
+
+@router.get("/podcast/{browse_id}")
+def podcast(browse_id: str):
+    try:
+        return deps.ytmusic.get_podcast(browse_id)
+    except deps._CATCH as exc:
+        raise deps._ytm_error(exc) from exc
+
+@router.get("/user/{channel_id}")
+def user_profile(channel_id: str):
+    try:
+        return deps.ytmusic.get_user(channel_id)
+    except deps._CATCH as exc:
+        raise deps._ytm_error(exc) from exc

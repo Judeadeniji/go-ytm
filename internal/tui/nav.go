@@ -9,6 +9,8 @@ const (
 	ScreenArtist
 	ScreenAlbum
 	ScreenPlaylist
+	ScreenPodcast
+	ScreenProfile
 )
 
 // Screen is one navigable center view.
