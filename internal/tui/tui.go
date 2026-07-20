@@ -87,6 +87,7 @@ type Model struct {
 	nowPlayingTab      string // "lyrics", "related", "queue"
 	lyricsLoading      bool
 	lyricsInstrumental bool
+	lyricsIsTranscript bool
 	lyricsErr          string
 	lyricsPlain        string
 	lyricsLines        []lyrics.Line
@@ -1060,6 +1061,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lyricsErr = ""
 		m.lyricsInstrumental = msg.Instrumental
+		m.lyricsIsTranscript = msg.IsTranscript
 		m.lyricsPlain = msg.Plain
 		keepBrowse := !m.lyricsFollow
 		m.lyricsLines = msg.Lines

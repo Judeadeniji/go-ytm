@@ -125,6 +125,9 @@ func (m Model) renderNowPlayingRightPane(width, height int) string {
 			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Padding(0, 1)
 		}
 		label := strings.ToUpper(t[:1]) + t[1:]
+		if t == "lyrics" && m.lyricsIsTranscript {
+			label = "Transcript"
+		}
 		tabs = append(tabs, m.zone.Mark("np_tab_"+t, style.Render(label)))
 	}
 	header := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
@@ -303,13 +306,17 @@ func (m Model) renderRelatedCarouselRow(index int, title string, cards []ytmapi.
 }
 
 func (m Model) lyricsHeaderLabel() string {
+	base := "Lyrics"
+	if m.lyricsIsTranscript {
+		base = "Transcript"
+	}
 	switch {
 	case len(m.lyricsLines) == 0 && m.lyricsPlain == "":
-		return "Lyrics"
+		return base
 	case m.lyricsFollow:
-		return "Lyrics · following"
+		return base + " · following"
 	default:
-		return "Lyrics · browsing · c follow"
+		return base + " · browsing · c follow"
 	}
 }
 
@@ -777,6 +784,7 @@ func (m *Model) ensureLyricsFetched() tea.Cmd {
 	return fetchLyrics(
 		m.lyricsClient,
 		m.sessionStore,
+		m.extractor,
 		m.currentTrack.VideoID,
 		key,
 		m.currentTrack.Title,

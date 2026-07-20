@@ -250,6 +250,7 @@ type LyricsMsg struct {
 	Instrumental bool
 	Plain        string
 	Lines        []lyrics.Line
+	IsTranscript bool
 	Err          error
 }
 
@@ -274,7 +275,7 @@ func fetchSongDetails(api *ytmapi.Client, videoID string, gen int, ctx context.C
 	}
 }
 
-func fetchLyrics(client *lyrics.Client, db *library.DB, videoID, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
+func fetchLyrics(client *lyrics.Client, db *library.DB, extractor *search.Extractor, videoID, trackKey, title, artist, album string, durationSec float64, gen int, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		if ctx == nil {
 			ctx = context.Background()
@@ -305,6 +306,48 @@ func fetchLyrics(client *lyrics.Client, db *library.DB, videoID, trackKey, title
 		}
 		res, err := client.FetchForTrack(ctx, title, artist, album, durationSec)
 		if err != nil {
+			// 2.5 Try YouTube transcript fallback (for podcasts/episodes)
+			if extractor != nil && videoID != "" {
+				tr, trErr := extractor.GetTranscript(ctx, videoID)
+				if trErr == nil && len(tr) > 0 {
+					var lines []lyrics.Line
+					var plain strings.Builder
+					var lrc strings.Builder
+					for _, seg := range tr {
+						d := time.Duration(seg.StartMs) * time.Millisecond
+						m := int(d.Minutes())
+						s := int(d.Seconds()) % 60
+						ms := int(d.Milliseconds()) % 1000 / 10
+						lrc.WriteString(fmt.Sprintf("[%02d:%02d.%02d]%s\n", m, s, ms, seg.Text))
+						
+						lines = append(lines, lyrics.Line{
+							Time: d,
+							Text: seg.Text,
+						})
+						plain.WriteString(seg.Text)
+						plain.WriteString("\n")
+					}
+					
+					if db != nil {
+						_ = db.SaveLyricsCache(videoID, library.CachedLyrics{
+							Instrumental: false,
+							Plain:        plain.String(),
+							Synced:       lrc.String(),
+						})
+					}
+
+					return LyricsMsg{
+						Gen:          gen,
+						TrackKey:     trackKey,
+						Instrumental: false,
+						Plain:        plain.String(),
+						Lines:        lines,
+						IsTranscript: true,
+						Err:          nil,
+					}
+				}
+			}
+
 			return LyricsMsg{Gen: gen, TrackKey: trackKey, Err: err}
 		}
 

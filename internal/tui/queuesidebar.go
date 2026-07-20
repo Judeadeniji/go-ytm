@@ -348,7 +348,11 @@ func (m Model) renderRailDetails(inner int) string {
 	sb.WriteString(m.zone.Mark("rail_meta_sleep", pad(lipgloss.NewStyle().Foreground(colorSubtext).Render("t cycle"))))
 	sb.WriteString("\n\n")
 
-	sb.WriteString(m.renderMetaRow(inner, "Lyrics", m.lyricsStatusLabel()))
+	label := "Lyrics"
+	if m.lyricsIsTranscript {
+		label = "Transcript"
+	}
+	sb.WriteString(m.renderMetaRow(inner, label, m.lyricsStatusLabel()))
 	refresh := lipgloss.NewStyle().Foreground(colorSubtext).Render("↻ refresh")
 	sb.WriteString(m.zone.Mark("rail_meta_lyrics_refresh", pad(refresh)))
 	sb.WriteString("\n")

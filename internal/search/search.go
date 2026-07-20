@@ -249,3 +249,24 @@ func lookPathYtDlp() (string, error) {
 
 	return "", &exec.Error{Name: "yt-dlp", Err: exec.ErrNotFound}
 }
+
+// GetTranscript attempts to fetch the transcript (auto-generated or otherwise) for a video using the youtube client.
+func (e *Extractor) GetTranscript(ctx context.Context, videoID string) ([]youtube.TranscriptSegment, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	video, err := e.client.GetVideoContext(ctx, videoID)
+	if err != nil {
+		return nil, err
+	}
+	// Lang "" will attempt to get the default or first available.
+	tr, err := e.client.GetTranscriptCtx(ctx, video, "")
+	if err != nil {
+		// Try fallback to english explicit
+		tr, err = e.client.GetTranscriptCtx(ctx, video, "en")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return tr, nil
+}
