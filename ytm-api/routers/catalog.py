@@ -19,9 +19,10 @@ router = APIRouter(tags=["catalog"])
 def transcript(video_id: str):
     """Fetch transcript using youtube-transcript-api."""
     try:
+        import dataclasses
         from youtube_transcript_api import YouTubeTranscriptApi
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        return {"transcript": transcript_list}
+        transcript_list = YouTubeTranscriptApi().fetch(video_id)
+        return {"transcript": [dataclasses.asdict(snippet) for snippet in transcript_list.snippets]}
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Transcript not found or unavailable: {exc}")
 
