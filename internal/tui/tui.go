@@ -105,7 +105,7 @@ type Model struct {
 	songDetailsLoading bool
 	songDetailsErr     string
 	songDetailsCancel  context.CancelFunc
-	
+
 	relatedTracks        []ytmapi.RelatedSection
 	relatedTracksVideoID string
 	relatedTracksGen     int
@@ -162,18 +162,18 @@ type Model struct {
 	listCursor     int // search / artist / sidebar / suggestions
 	homeCardCursor int // card index within active home carousel
 	queueCursor    int // focus in queue panel (separate from playing index)
-	
-	libraryTab      string // "playlists", "songs", "albums", "artists", "downloads"
-	downloadsSubTab string // "playlists" | "albums" | "songs" | "active"
-	libPlaylists    []map[string]any
-	libSongs        []map[string]any
-	libAlbums       []map[string]any
-	libArtists      []map[string]any
+
+	libraryTab            string // "playlists", "songs", "albums", "artists", "downloads"
+	downloadsSubTab       string // "playlists" | "albums" | "songs" | "active"
+	libPlaylists          []map[string]any
+	libSongs              []map[string]any
+	libAlbums             []map[string]any
+	libArtists            []map[string]any
 	libDownloads          []library.CachedTrack
 	libOfflineCollections []library.OfflineCollection
 	dlProgress            map[string]dlProgressEntry // in-flight download progress by videoID
-	
-	railTab        RailTab
+
+	railTab RailTab
 
 	sessionStore      *library.DB
 	sessionDirty      bool
@@ -186,17 +186,17 @@ type Model struct {
 	navCtx    context.Context
 
 	// Explore state
-	exploreData       *ytmapi.ExploreData
-	exploreLoading    bool
-	exploreErr        string
-	moodCategories    map[string][]ytmapi.MoodCategory
-	moodCatsLoading   bool
-	activeMoodParams  string
-	moodPlaylists     []map[string]any
-	chartsData        *ytmapi.ChartsData
-	chartsLoading     bool
-	chartsCountry     string
-	exploreSubTab     string // "overview" | "moods" | "charts"
+	exploreData      *ytmapi.ExploreData
+	exploreLoading   bool
+	exploreErr       string
+	moodCategories   map[string][]ytmapi.MoodCategory
+	moodCatsLoading  bool
+	activeMoodParams string
+	moodPlaylists    []map[string]any
+	chartsData       *ytmapi.ChartsData
+	chartsLoading    bool
+	chartsCountry    string
+	exploreSubTab    string // "overview" | "moods" | "charts"
 
 	// imageDirty is true when thumbs arrived and a debounced redraw is pending.
 	imageDirty bool
@@ -237,17 +237,17 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 	isAuthenticated := errAuth == nil
 
 	m := Model{
-		activePane:     PaneMain,
-		activeCarousel: 0,
-		menuItems:      []string{"Home", "Explore", "Library", "Settings"},
-		activeMenu:     "Home",
-		libraryTab:      "playlists",
-		downloadsSubTab: "playlists",
-		libPlaylists: []map[string]any{},
-		libSongs:     []map[string]any{},
-		libAlbums:    []map[string]any{},
-		libArtists:   []map[string]any{},
-		filters:      []string{"All", "Songs", "Albums", "Artists", "Playlists"},
+		activePane:        PaneMain,
+		activeCarousel:    0,
+		menuItems:         []string{"Home", "Explore", "Library", "Settings"},
+		activeMenu:        "Home",
+		libraryTab:        "playlists",
+		downloadsSubTab:   "playlists",
+		libPlaylists:      []map[string]any{},
+		libSongs:          []map[string]any{},
+		libAlbums:         []map[string]any{},
+		libArtists:        []map[string]any{},
+		filters:           []string{"All", "Songs", "Albums", "Artists", "Playlists"},
 		searchFilter:      "",
 		homeCarousels:     nil,
 		searchSuggestions: []SearchSuggestion{},
@@ -284,7 +284,7 @@ func NewModel(p *player.Player, ext *search.Extractor, apiClient *ytmapi.Client,
 		preloadCancel:     make(map[string]context.CancelFunc),
 		dlProgress:        make(map[string]dlProgressEntry),
 	}
-	
+
 	dlMgr, _ := download.NewManager(ext, store)
 	m.downloadMgr = dlMgr
 	if status != "Ready" {
@@ -1529,7 +1529,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setMainContent()
 			return m, nil
 		}
-		
+
 		id := msg.RequestID
 		if id == "" {
 			id = msg.Page.ChannelID
@@ -1638,7 +1638,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			
+
 			if offlineCol != nil {
 				// Construct synthetic album page
 				var tracks []ytmapi.TrackItem
@@ -1663,7 +1663,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				msg.Err = nil
 			}
-			
+
 			if msg.Err != nil || msg.Page == nil {
 				errStr := fmtErr(msg.Err)
 				if msg.Page == nil && msg.Err == nil {
@@ -1677,7 +1677,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		
+
 		m.pageCache["album_"+msg.BrowseID] = msg.Page
 		m.albumPage = msg.Page
 		m.backfillOfflineCollectionThumb(msg.BrowseID, firstThumbURL(msg.Page.Thumbnails))
@@ -1707,7 +1707,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			
+
 			if offlineCol != nil {
 				// Construct synthetic playlist page
 				var tracks []ytmapi.TrackItem
@@ -1746,7 +1746,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		
+
 		m.pageCache["playlist_"+msg.Page.ID] = msg.Page
 		m.playlistPage = msg.Page
 		m.backfillOfflineCollectionThumb(msg.Page.ID, firstThumbURL(msg.Page.Thumbnails))
@@ -1924,11 +1924,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authState = 0
 		m.isAuthenticated = true
 		m.notifyDesktop("Signed in", "Successfully authenticated!")
-		m.homeCarousels = nil
-		m.exploreData = nil
-		m.moodCategories = nil
-		m.moodPlaylists = nil
-		m.chartsData = nil
+		m.invalidateAuthCaches()
 		m.setMainContent()
 		return m, fetchHome(m.ytmapiClient)
 
@@ -1974,11 +1970,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isAuthenticated = true
 		m.notifyDesktop("Signed in", "Successfully authenticated!")
 		m.oauthCodeResp = nil
-		m.homeCarousels = nil
-		m.exploreData = nil
-		m.moodCategories = nil
-		m.moodPlaylists = nil
-		m.chartsData = nil
+		m.invalidateAuthCaches()
 		m.setMainContent()
 		return m, fetchHome(m.ytmapiClient)
 

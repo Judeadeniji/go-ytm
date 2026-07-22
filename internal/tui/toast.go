@@ -48,6 +48,39 @@ func (m *Model) clearToast() {
 	m.toastAt = time.Time{}
 }
 
+// invalidateAuthCaches clears all page- and data-caches that depend on the
+// authenticated identity. Call this whenever auth state changes so the next
+// navigation/library access fetches fresh, personalised data.
+func (m *Model) invalidateAuthCaches() {
+	// Content pages (artist / album / playlist / podcast / profile)
+	m.pageCache = make(map[string]any)
+	m.artistPage = nil
+	m.albumPage = nil
+	m.playlistPage = nil
+	m.podcastPage = nil
+	m.userPage = nil
+
+	// Home & explore feeds
+	m.homeCarousels = nil
+	m.exploreData = nil
+	m.moodCategories = nil
+	m.moodPlaylists = nil
+	m.chartsData = nil
+
+	// Library tabs
+	m.libPlaylists = nil
+	m.libSongs = nil
+	m.libAlbums = nil
+	m.libArtists = nil
+
+	// User profile badge
+	m.userProfile = nil
+
+	// Search results are user-specific when auth is present
+	m.searchResults = nil
+	m.lastSearchQuery = ""
+}
+
 func (m *Model) expireToast() bool {
 	if m.statusMsg == "" || m.toastAt.IsZero() {
 		return false
