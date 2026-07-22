@@ -1099,8 +1099,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case LibraryDataMsg:
 		if msg.Err != nil {
-			// Background sidebar fetch shouldn't clobber the current page with an error banner.
-			if m.activeMenu == "Library" && m.libraryTab == msg.Tab {
+			// 400/401/403 means stored credentials are invalid — reflect that in the UI.
+			if ytmapi.IsAuthError(msg.Err) && m.isAuthenticated {
+				m.isAuthenticated = false
+				m.setStatus("Session expired — please sign in again via Settings")
+			} else if m.activeMenu == "Library" && m.libraryTab == msg.Tab {
+				// Background sidebar fetch shouldn't clobber the current page with an error banner.
 				m.pageErr = msg.Err.Error()
 			}
 		} else {
@@ -1815,8 +1819,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 	case HomeMsg:
 		if msg.Err != nil {
+			if ytmapi.IsUpstreamError(msg.Err) {
+				m.setStatus("YouTube Music is unavailable — retrying…")
+				return m, tea.Tick(10*time.Second, func(time.Time) tea.Msg {
+					return HomeMsg{Err: nil} // trigger a silent re-fetch
+				})
+			}
 			m.setStatus(fmt.Sprintf("Home error: %v", msg.Err))
 			return m, nil
+		}
+		if msg.Carousels == nil {
+			// Triggered by retry tick — re-fetch for real.
+			return m, fetchHome(m.ytmapiClient)
 		}
 		m.homeCarousels = msg.Carousels
 		m.setMainContent()

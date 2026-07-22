@@ -3,6 +3,7 @@ package ytmapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -117,13 +118,47 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
-		return fmt.Errorf("ytm-api %d: %s", resp.StatusCode, msg)
+		return &APIError{Status: resp.StatusCode, Detail: msg}
 	}
 
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("ytm-api decode: %w", err)
 	}
 	return nil
+}
+
+// APIError wraps a non-200 response from the ytm-api so callers can
+// inspect the HTTP status code without parsing the error string.
+type APIError struct {
+	Status int
+	Detail string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("ytm-api %d: %s", e.Status, e.Detail)
+}
+
+// IsAuthError returns true for 400/401/403 responses that indicate the
+// stored credentials are missing or invalid.
+func IsAuthError(err error) bool {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Status == http.StatusBadRequest ||
+			ae.Status == http.StatusUnauthorized ||
+			ae.Status == http.StatusForbidden
+	}
+	return false
+}
+
+// IsUpstreamError returns true for 502/503/504 responses — transient YouTube failures.
+func IsUpstreamError(err error) bool {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Status == http.StatusBadGateway ||
+			ae.Status == http.StatusServiceUnavailable ||
+			ae.Status == http.StatusGatewayTimeout
+	}
+	return false
 }
 
 type searchResponse struct {
@@ -343,7 +378,6 @@ func (c *Client) GetCharts(ctx context.Context, country string) (*ChartsData, er
 	return &data, nil
 }
 
-
 // ArtistName returns a display string from artists slice or flat artist field.
 func (t TrackItem) ArtistName() string {
 	if len(t.Artists) > 0 {
@@ -414,12 +448,12 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 		ctx = context.Background()
 	}
 	u := c.baseURL + path
-	
+
 	importBytes, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("ytm-api marshal: %w", err)
 	}
-	
+
 	var resp *http.Response
 	var duration time.Duration
 	start := time.Now()
@@ -466,7 +500,7 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 	if err != nil {
 		return fmt.Errorf("ytm-api read: %w", err)
 	}
-	
+
 	if resp.StatusCode != http.StatusOK {
 		var errBody struct {
 			Detail string `json:"detail"`
@@ -474,9 +508,15 @@ func (c *Client) postJSON(ctx context.Context, path string, body any, out any) e
 		}
 		_ = json.Unmarshal(respBody, &errBody)
 		msg := errBody.Detail
-		if msg == "" { msg = errBody.Error }
-		if msg == "" { msg = string(respBody) }
-		if len(msg) > 200 { msg = msg[:200] }
+		if msg == "" {
+			msg = errBody.Error
+		}
+		if msg == "" {
+			msg = string(respBody)
+		}
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
 		return fmt.Errorf("ytm-api %d: %s", resp.StatusCode, msg)
 	}
 	if out != nil {
@@ -500,7 +540,9 @@ type libraryPlaylistsResponse struct {
 }
 
 func (c *Client) GetLibraryPlaylists(ctx context.Context, limit int) ([]map[string]any, error) {
-	if limit <= 0 { limit = 50 }
+	if limit <= 0 {
+		limit = 50
+	}
 	var data libraryPlaylistsResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/library/playlists?limit=%d", limit), &data); err != nil {
 		return nil, err
@@ -513,7 +555,9 @@ type librarySongsResponse struct {
 }
 
 func (c *Client) GetLibrarySongs(ctx context.Context, limit int) ([]map[string]any, error) {
-	if limit <= 0 { limit = 100 }
+	if limit <= 0 {
+		limit = 100
+	}
 	var data librarySongsResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/library/songs?limit=%d", limit), &data); err != nil {
 		return nil, err
@@ -526,7 +570,9 @@ type libraryAlbumsResponse struct {
 }
 
 func (c *Client) GetLibraryAlbums(ctx context.Context, limit int) ([]map[string]any, error) {
-	if limit <= 0 { limit = 100 }
+	if limit <= 0 {
+		limit = 100
+	}
 	var data libraryAlbumsResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/library/albums?limit=%d", limit), &data); err != nil {
 		return nil, err
@@ -539,7 +585,9 @@ type libraryArtistsResponse struct {
 }
 
 func (c *Client) GetLibraryArtists(ctx context.Context, limit int) ([]map[string]any, error) {
-	if limit <= 0 { limit = 100 }
+	if limit <= 0 {
+		limit = 100
+	}
 	var data libraryArtistsResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/library/artists?limit=%d", limit), &data); err != nil {
 		return nil, err
