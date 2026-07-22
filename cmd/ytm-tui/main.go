@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
-	runewidth "github.com/mattn/go-runewidth"
 	"github.com/judeadeniji/go-ytm/internal/apirunner"
 	"github.com/judeadeniji/go-ytm/internal/lyrics"
 	"github.com/judeadeniji/go-ytm/internal/player"
 	"github.com/judeadeniji/go-ytm/internal/search"
 	"github.com/judeadeniji/go-ytm/internal/tui"
 	"github.com/judeadeniji/go-ytm/internal/ytmapi"
+	runewidth "github.com/mattn/go-runewidth"
 )
 
 // Set via -ldflags at build/release time.
@@ -80,12 +80,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("Starting ytm-api supervisor...")
-	api, err := apirunner.Start()
+	slog.Info("Starting ytm-api supervisor with loading screen...")
+	loadingProg := tea.NewProgram(initialLoadingModel())
+	lm, err := loadingProg.Run()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting ytm-api: %v\n\nRun: ytm doctor\n", err)
+		fmt.Fprintf(os.Stderr, "Error running loading screen: %v\n", err)
 		os.Exit(1)
 	}
+	finalModel := lm.(loadingModel)
+	if finalModel.err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting ytm-api: %v\n\nRun: ytm doctor\n", finalModel.err)
+		os.Exit(1)
+	}
+	api := finalModel.api
 	defer func() { _ = api.Stop() }()
 
 	slog.Info("Starting go-ytm TUI...", "version", version)
