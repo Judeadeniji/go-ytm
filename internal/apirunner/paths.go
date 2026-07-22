@@ -21,20 +21,31 @@ type Paths struct {
 
 // ResolvePaths picks API/state locations from env and XDG conventions.
 // API home order: YTM_API_HOME → (YTM_DEV=1) ./ytm-api → XDG_DATA_HOME/go-ytm/ytm-api → ~/.local/share/go-ytm/ytm-api.
+// In dev mode (YTM_DEV=1) state files (socket, log, token) are written to
+// ./tmp/ so they never conflict with an installed production instance.
 func ResolvePaths() (Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Paths{}, err
 	}
 
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
-		state = filepath.Join(home, ".local", "state")
+	dev := os.Getenv("YTM_DEV") == "1"
+
+	var stateDir string
+	if dev {
+		// Use a local tmp/ dir so dev and prod never share a socket or log.
+		cwd, _ := os.Getwd()
+		stateDir = filepath.Join(cwd, "tmp")
+	} else {
+		state := os.Getenv("XDG_STATE_HOME")
+		if state == "" {
+			state = filepath.Join(home, ".local", "state")
+		}
+		stateDir = filepath.Join(state, "go-ytm")
 	}
-	stateDir := filepath.Join(state, "go-ytm")
 
 	apiHome := os.Getenv("YTM_API_HOME")
-	if apiHome == "" && os.Getenv("YTM_DEV") == "1" {
+	if apiHome == "" && dev {
 		if cwd, err := os.Getwd(); err == nil {
 			cand := filepath.Join(cwd, "ytm-api")
 			if isAPIHome(cand) {
@@ -50,6 +61,17 @@ func ResolvePaths() (Paths, error) {
 		apiHome = filepath.Join(data, "go-ytm", "ytm-api")
 	}
 
+	// Auth credentials always live in the real state dir so dev runs don't
+	// require re-authentication when the installed app is already signed in.
+	prodStateDir := stateDir
+	if dev {
+		state := os.Getenv("XDG_STATE_HOME")
+		if state == "" {
+			state = filepath.Join(home, ".local", "state")
+		}
+		prodStateDir = filepath.Join(state, "go-ytm")
+	}
+
 	p := Paths{
 		StateDir:  stateDir,
 		APIHome:   apiHome,
@@ -57,7 +79,7 @@ func ResolvePaths() (Paths, error) {
 		SockPath:  filepath.Join(stateDir, "ytm-api.sock"),
 		TokenPath: filepath.Join(stateDir, "api.token"),
 		LogPath:   filepath.Join(stateDir, "ytm-api.log"),
-		AuthFile:  filepath.Join(stateDir, "headers_auth.json"),
+		AuthFile:  filepath.Join(prodStateDir, "headers_auth.json"),
 	}
 	if s := os.Getenv("YTM_API_SOCK"); s != "" {
 		p.SockPath = s
