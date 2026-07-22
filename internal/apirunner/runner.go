@@ -222,6 +222,13 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// VenvReady reports whether the Python venv is already set up and usable.
+// Used by main to decide whether to show a first-time setup message.
+func VenvReady() bool {
+	paths, _ := ResolvePaths()
+	return venvOK(paths)
+}
+
 // venvOK reports whether the venv has uvicorn and a non-AppImage interpreter.
 func venvOK(p Paths) bool {
 	uvicorn := filepath.Join(p.VenvDir, "bin", "uvicorn")

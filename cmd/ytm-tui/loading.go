@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -14,17 +15,21 @@ type apiResultMsg struct {
 }
 
 type loadingModel struct {
-	spinner  spinner.Model
-	err      error
-	quitting bool
-	api      *apirunner.Runner
+	spinner   spinner.Model
+	err       error
+	quitting  bool
+	api       *apirunner.Runner
+	firstTime bool // true only when the venv hasn't been built yet
 }
 
 func initialLoadingModel() loadingModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return loadingModel{spinner: s}
+	return loadingModel{
+		spinner:   s,
+		firstTime: !apirunner.VenvReady(),
+	}
 }
 
 func (m loadingModel) Init() tea.Cmd {
@@ -58,5 +63,9 @@ func (m loadingModel) View() string {
 	if m.quitting {
 		return ""
 	}
-	return fmt.Sprintf("\n\n   %s Setting things up for the first time... This might take a minute.\n\n", m.spinner.View())
+	msg := "Starting..."
+	if m.firstTime {
+		msg = "Setting things up for the first time... This might take a minute."
+	}
+	return fmt.Sprintf("\n\n   %s %s\n\n", m.spinner.View(), msg)
 }
