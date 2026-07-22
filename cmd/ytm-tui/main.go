@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -44,6 +45,9 @@ func main() {
 			return
 		case "doctor", "--doctor":
 			fmt.Print(apirunner.Doctor(version).Format())
+			return
+		case "upgrade", "--upgrade":
+			upgradeYTM()
 			return
 		}
 	}
@@ -126,6 +130,7 @@ func printHelp() {
 Usage:
   ytm              Start the player (boots local ytm-api if needed)
   ytm doctor       Show paths, dependencies, and API health
+  ytm upgrade      Upgrade to the latest release
   ytm --version    Print version
   ytm --help       Show this help
 
@@ -139,4 +144,15 @@ State:  ~/.local/state/go-ytm
 API:    ~/.local/share/go-ytm/ytm-api  (or YTM_API_HOME)
 
 `)
+}
+
+func upgradeYTM() {
+	fmt.Println("==> Upgrading go-ytm to the latest version...")
+	cmd := exec.Command("bash", "-c", "curl -fsSL https://raw.githubusercontent.com/Judeadeniji/go-ytm/main/scripts/install.sh | bash")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Upgrade failed: %v\n", err)
+		os.Exit(1)
+	}
 }
