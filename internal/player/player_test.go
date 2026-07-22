@@ -75,7 +75,7 @@ func TestHelperProcess(t *testing.T) {
 				}
 			}()
 		}
-		
+
 		// Keep running until killed
 		time.Sleep(1 * time.Hour)
 		os.Exit(0)
@@ -96,7 +96,7 @@ func TestNewPlayer(t *testing.T) {
 	if player.cmd == nil {
 		t.Errorf("Expected cmd to be set")
 	}
-	
+
 	if player.conn == nil {
 		t.Errorf("Expected conn to be set")
 	}
@@ -105,17 +105,17 @@ func TestNewPlayer(t *testing.T) {
 	if err != nil {
 		t.Errorf("Play failed: %v", err)
 	}
-	
+
 	err = player.Pause()
 	if err != nil {
 		t.Errorf("Pause failed: %v", err)
 	}
-	
+
 	err = player.Load("dummy_url")
 	if err != nil {
 		t.Errorf("Load failed: %v", err)
 	}
-	
+
 	err = player.Stop()
 	if err != nil {
 		t.Errorf("Stop failed: %v", err)

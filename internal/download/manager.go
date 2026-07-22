@@ -27,10 +27,10 @@ type ProgressMsg struct {
 
 // Manager handles a background queue of downloads.
 type Manager struct {
-	extractor  *search.Extractor
-	db         *library.DB
-	dir        string
-	
+	extractor *search.Extractor
+	db        *library.DB
+	dir       string
+
 	mu      sync.Mutex
 	active  map[string]context.CancelFunc
 	program *tea.Program
@@ -42,7 +42,7 @@ func NewManager(extractor *search.Extractor, db *library.DB) (*Manager, error) {
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return nil, err
 	}
-	
+
 	m := &Manager{
 		extractor: extractor,
 		db:        db,
@@ -65,7 +65,7 @@ func (m *Manager) Enqueue(t library.CachedTrack) {
 		m.mu.Unlock()
 		return
 	}
-	
+
 	// Create context
 	ctx, cancel := context.WithCancel(context.Background())
 	m.active[t.VideoID] = cancel
@@ -115,7 +115,7 @@ type progressWriter struct {
 func (pw *progressWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	pw.current += int64(n)
-	
+
 	if pw.program != nil {
 		now := time.Now()
 		if now.Sub(pw.lastPub) > 500*time.Millisecond {
@@ -128,7 +128,7 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 			pw.lastPub = now
 		}
 	}
-	
+
 	return n, nil
 }
 
@@ -166,7 +166,7 @@ func (m *Manager) worker(ctx context.Context, t library.CachedTrack) {
 		sendProgress(true, err, 0)
 		return
 	}
-	
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		sendProgress(true, err, 0)
@@ -188,7 +188,7 @@ func (m *Manager) worker(ctx context.Context, t library.CachedTrack) {
 		sendProgress(true, err, 0)
 		return
 	}
-	
+
 	m.mu.Lock()
 	pw := &progressWriter{
 		videoID: t.VideoID,
@@ -207,7 +207,7 @@ func (m *Manager) worker(ctx context.Context, t library.CachedTrack) {
 		sendProgress(true, err, 0)
 		return
 	}
-	
+
 	if err := os.Rename(tmpPath, t.Path); err != nil {
 		sendProgress(true, err, 0)
 		return

@@ -338,7 +338,7 @@ func (m Model) generateProfileContent(mainWidth int) string {
 			} else if s := mapStr(v, "views"); s != "" {
 				subParts = append(subParts, s)
 			}
-			
+
 			sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).Render(strings.Join(subParts, " · "))
 			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).Render(prefix + titleStr)
 			row := lipgloss.JoinVertical(lipgloss.Left, titleStyled, lipgloss.NewStyle().Background(bg).Render("  "+sub))

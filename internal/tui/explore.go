@@ -41,7 +41,7 @@ func (m Model) generateExploreContent(mainWidth int) string {
 	if activeTab == "moodPlaylists" {
 		activeTab = "moods"
 	}
-	
+
 	for _, t := range tabs {
 		style := lipgloss.NewStyle().Padding(0, 2).Foreground(colorSubtext)
 		if activeTab == t.id {
@@ -99,7 +99,7 @@ func (m Model) exploreOverviewCarousels() []ytmapi.HomeCarousel {
 
 func (m Model) renderExploreOverview(w int) string {
 	var mb strings.Builder
-	
+
 	carousels := m.exploreOverviewCarousels()
 	for i, car := range carousels {
 		mb.WriteString(m.renderCarouselRow(i, car.Title, car.Contents, w))
@@ -176,15 +176,15 @@ func (m Model) renderExploreMoods(w int) string {
 	if len(m.moodCategories) == 0 {
 		return lipgloss.NewStyle().Foreground(colorSubtext).Render("No moods available")
 	}
-	
+
 	for section, categories := range m.moodCategories {
 		mb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(section))
 		mb.WriteString("\n\n")
-		
+
 		var rows []string
 		var currentRow []string
 		currentW := 0
-		
+
 		for _, cat := range categories {
 			tile := lipgloss.NewStyle().
 				Foreground(colorText).
@@ -192,9 +192,9 @@ func (m Model) renderExploreMoods(w int) string {
 				Padding(1, 3).
 				Margin(0, 1, 1, 0).
 				Render(cat.Title)
-				
+
 			tile = m.zone.Mark("mood_"+cat.Params, tile)
-			
+
 			tileW := lipgloss.Width(tile)
 			if currentW+tileW > w && len(currentRow) > 0 {
 				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Left, currentRow...))
@@ -207,13 +207,10 @@ func (m Model) renderExploreMoods(w int) string {
 		if len(currentRow) > 0 {
 			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Left, currentRow...))
 		}
-		
+
 		mb.WriteString(strings.Join(rows, "\n"))
 		mb.WriteString("\n\n")
 	}
 
 	return mb.String()
 }
-
-
-

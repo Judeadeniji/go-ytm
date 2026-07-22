@@ -319,7 +319,7 @@ func fetchLyrics(client *lyrics.Client, db *library.DB, ytmClient *ytmapi.Client
 						s := int(d.Seconds()) % 60
 						ms := int(d.Milliseconds()) % 1000 / 10
 						lrc.WriteString(fmt.Sprintf("[%02d:%02d.%02d]%s\n", m, s, ms, seg.Text))
-						
+
 						lines = append(lines, lyrics.Line{
 							Time: d,
 							Text: seg.Text,
@@ -327,7 +327,7 @@ func fetchLyrics(client *lyrics.Client, db *library.DB, ytmClient *ytmapi.Client
 						plain.WriteString(seg.Text)
 						plain.WriteString("\n")
 					}
-					
+
 					if db != nil {
 						_ = db.SaveLyricsCache(videoID, library.CachedLyrics{
 							Instrumental: false,

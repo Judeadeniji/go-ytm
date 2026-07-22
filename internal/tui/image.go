@@ -88,8 +88,6 @@ func fitArtBox(s string, width, height int) string {
 		Render(s)
 }
 
-
-
 // mosaic treats Width/Height as pixel samples stepped 2×2 per cell, so we
 // request 2× the desired character-cell size. ANSI halfblocks is fallback only.
 func renderWithTermimg(img image.Image, width, height int) string {
@@ -155,18 +153,18 @@ func ansiHalfblocks(img image.Image, width, height int) string {
 
 	for y := 0; y < height*2; y += 2 {
 		var lastFg, lastBg uint32 = 0xFFFFFFFF, 0xFFFFFFFF // Invalid initial colors
-		
+
 		for x := 0; x < width; x++ {
 			r1, g1, b1, _ := scaled.At(x, y).RGBA()
 			r2, g2, b2, _ := scaled.At(x, y+1).RGBA()
-			
+
 			// Extract 8-bit RGB
 			r1, g1, b1 = r1>>8, g1>>8, b1>>8
 			r2, g2, b2 = r2>>8, g2>>8, b2>>8
-			
+
 			fg := (r1 << 16) | (g1 << 8) | b1
 			bg := (r2 << 16) | (g2 << 8) | b2
-			
+
 			if fg != lastFg {
 				sb.WriteString(fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r1, g1, b1))
 				lastFg = fg

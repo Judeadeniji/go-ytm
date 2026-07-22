@@ -6,15 +6,15 @@ import (
 
 // Track represents a playable audio track.
 type Track struct {
-	VideoID        string
-	Title          string
-	Artist         string
-	ArtistID       string // channel / browse id when known
-	Album          string
-	AlbumID        string // album browse id when known
-	Duration       string // display duration from API (e.g. "3:07")
-	ThumbnailURL   string
-	IsExplicit     bool
+	VideoID      string
+	Title        string
+	Artist       string
+	ArtistID     string // channel / browse id when known
+	Album        string
+	AlbumID      string // album browse id when known
+	Duration     string // display duration from API (e.g. "3:07")
+	ThumbnailURL string
+	IsExplicit   bool
 }
 
 // Queue manages an ordered list of tracks with a current-position pointer.
@@ -58,7 +58,7 @@ func (q *Queue) PeekNext(shuffle, repeatAll bool) (Track, bool) {
 	if len(q.tracks) == 0 {
 		return Track{}, false
 	}
-	
+
 	if shuffle {
 		if q.shuffleNext == -1 {
 			if len(q.tracks) == 1 {

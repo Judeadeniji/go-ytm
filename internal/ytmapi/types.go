@@ -32,17 +32,17 @@ type SearchResult struct {
 	BrowseID   string `json:"browseId,omitempty"`
 	PlaylistID string `json:"playlistId,omitempty"`
 	// Type holds Album/Single/EP for album-like results (resultType is still "album").
-	Type    string     `json:"type,omitempty"`
-	Artists []NamedRef `json:"artists,omitempty"`
-	Artist  string     `json:"artist,omitempty"`
-	Author  string     `json:"author,omitempty"`
-	Duration  string      `json:"duration,omitempty"`
-	Views     string      `json:"views,omitempty"`
-	Year      string      `json:"year,omitempty"`
-	ItemCount string      `json:"itemCount,omitempty"`
-	Album     NamedRef    `json:"album,omitempty"`
-	VideoType string      `json:"videoType,omitempty"`
-	IsExplicit bool       `json:"isExplicit,omitempty"`
+	Type       string      `json:"type,omitempty"`
+	Artists    []NamedRef  `json:"artists,omitempty"`
+	Artist     string      `json:"artist,omitempty"`
+	Author     string      `json:"author,omitempty"`
+	Duration   string      `json:"duration,omitempty"`
+	Views      string      `json:"views,omitempty"`
+	Year       string      `json:"year,omitempty"`
+	ItemCount  string      `json:"itemCount,omitempty"`
+	Album      NamedRef    `json:"album,omitempty"`
+	VideoType  string      `json:"videoType,omitempty"`
+	IsExplicit bool        `json:"isExplicit,omitempty"`
 	Thumbnails []Thumbnail `json:"thumbnails,omitempty"`
 }
 
@@ -93,24 +93,24 @@ type HomeCarousel struct {
 
 // RelatedSection is one content block on the related tracks page.
 type RelatedSection struct {
-	Title    string                  `json:"title"`
-	Contents []HomeCarouselItem      `json:"-"` // parsed conditionally
-	RawContents json.RawMessage      `json:"contents"`
+	Title       string             `json:"title"`
+	Contents    []HomeCarouselItem `json:"-"` // parsed conditionally
+	RawContents json.RawMessage    `json:"contents"`
 }
 
 // TrackItem is a playable row shared across album/playlist/watch/artist songs.
 type TrackItem struct {
-	VideoID   string      `json:"videoId,omitempty"`
-	Title     string      `json:"title"`
-	Artists   []NamedRef  `json:"artists,omitempty"`
-	Artist    string      `json:"artist,omitempty"` // artist songs section often uses flat string
-	Album     any         `json:"album,omitempty"` // string or NamedRef
-	Duration  string      `json:"duration,omitempty"`
-	Length    string      `json:"length,omitempty"` // watch playlist
-	Views     string      `json:"views,omitempty"`
-	VideoType string      `json:"videoType,omitempty"`
-	Year      string      `json:"year,omitempty"`
-	IsExplicit bool       `json:"isExplicit,omitempty"`
+	VideoID    string      `json:"videoId,omitempty"`
+	Title      string      `json:"title"`
+	Artists    []NamedRef  `json:"artists,omitempty"`
+	Artist     string      `json:"artist,omitempty"` // artist songs section often uses flat string
+	Album      any         `json:"album,omitempty"`  // string or NamedRef
+	Duration   string      `json:"duration,omitempty"`
+	Length     string      `json:"length,omitempty"` // watch playlist
+	Views      string      `json:"views,omitempty"`
+	VideoType  string      `json:"videoType,omitempty"`
+	Year       string      `json:"year,omitempty"`
+	IsExplicit bool        `json:"isExplicit,omitempty"`
 	Thumbnails []Thumbnail `json:"thumbnails,omitempty"`
 	Thumbnail  []Thumbnail `json:"thumbnail,omitempty"` // watch uses singular key
 	PlaylistID string      `json:"playlistId,omitempty"`
@@ -288,7 +288,6 @@ type ChartsData struct {
 	Weekly    []HomeCarouselItem `json:"weekly,omitempty"`
 }
 
-
 func (s *SearchResult) UnmarshalJSON(b []byte) error {
 	if len(b) == 0 || string(b) == "null" {
 		return nil
@@ -299,7 +298,6 @@ func (s *SearchResult) UnmarshalJSON(b []byte) error {
 	*s = SearchResult(tmp)
 	return nil
 }
-
 
 func (s *SearchSuggestionItem) UnmarshalJSON(b []byte) error {
 	if len(b) == 0 || string(b) == "null" {

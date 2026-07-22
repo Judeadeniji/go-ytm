@@ -72,16 +72,30 @@ func (m Model) artistFocusItems() []artistFocusItem {
 	var out []artistFocusItem
 	add := func(kind, title string, results []map[string]any) {
 		for i, item := range results {
-			if i >= 12 { break }
-			if artistItemZone(kind, item) == "" { continue }
+			if i >= 12 {
+				break
+			}
+			if artistItemZone(kind, item) == "" {
+				continue
+			}
 			out = append(out, artistFocusItem{Kind: kind, Title: title, Item: item})
 		}
 	}
-	if a.Songs != nil { add("song", "", a.Songs.Results) }
-	if a.Albums != nil { add("album", "Albums", a.Albums.Results) }
-	if a.Singles != nil { add("album", "Singles & EPs", a.Singles.Results) }
-	if a.Videos != nil { add("video", "Videos", a.Videos.Results) }
-	if a.Related != nil { add("related", "Fans Also Like", a.Related.Results) }
+	if a.Songs != nil {
+		add("song", "", a.Songs.Results)
+	}
+	if a.Albums != nil {
+		add("album", "Albums", a.Albums.Results)
+	}
+	if a.Singles != nil {
+		add("album", "Singles & EPs", a.Singles.Results)
+	}
+	if a.Videos != nil {
+		add("video", "Videos", a.Videos.Results)
+	}
+	if a.Related != nil {
+		add("related", "Fans Also Like", a.Related.Results)
+	}
 	return out
 }
 
@@ -93,30 +107,44 @@ func (m Model) profileFocusItems() []artistFocusItem {
 	var out []artistFocusItem
 	add := func(kind, title string, results []map[string]any) {
 		for _, item := range results {
-			if artistItemZone(kind, item) == "" { continue }
+			if artistItemZone(kind, item) == "" {
+				continue
+			}
 			out = append(out, artistFocusItem{Kind: kind, Title: title, Item: item})
 		}
 	}
-	if u.Playlists != nil { add("playlists", "Playlists", u.Playlists.Results) }
-	if u.Videos != nil { add("videos", "Videos", u.Videos.Results) }
+	if u.Playlists != nil {
+		add("playlists", "Playlists", u.Playlists.Results)
+	}
+	if u.Videos != nil {
+		add("videos", "Videos", u.Videos.Results)
+	}
 	return out
 }
 
 func (m *Model) ensureArtistCarouselCursorVisible(items []artistFocusItem) {
-	if m.listCursor < 0 || m.listCursor >= len(items) { return }
+	if m.listCursor < 0 || m.listCursor >= len(items) {
+		return
+	}
 	focused := items[m.listCursor]
-	if focused.Title == "" { return } // Songs aren't carousels
+	if focused.Title == "" {
+		return
+	} // Songs aren't carousels
 
 	// Find the local index of this item in its carousel
 	localIndex := 0
 	for i := 0; i < m.listCursor; i++ {
-		if items[i].Title == focused.Title { localIndex++ }
+		if items[i].Title == focused.Title {
+			localIndex++
+		}
 	}
 
 	contentWidth := m.mainWidth() - 2
 	cardWidth := 28
 	maxVisible := contentWidth / cardWidth
-	if maxVisible < 1 { maxVisible = 1 }
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
 
 	title := focused.Title
 	offset := m.carouselOffsets[title]
@@ -803,7 +831,7 @@ func (m *Model) ensureListCursorInViewGrid(cursor, cols, rowHeight int) {
 	}
 	row := cursor / cols
 	cursorY := row * rowHeight
-	
+
 	if cursorY < m.mainViewport.YOffset {
 		m.mainViewport.YOffset = cursorY
 	} else if cursorY+rowHeight > m.mainViewport.YOffset+m.mainViewport.Height {

@@ -222,7 +222,7 @@ func (m Model) renderRelatedCarouselRow(index int, title string, cards []ytmapi.
 	if space < 1 {
 		space = 1
 	}
-	
+
 	row.WriteString(titleStr)
 	row.WriteString(strings.Repeat(" ", space))
 	row.WriteString(arrows)
@@ -244,7 +244,7 @@ func (m Model) renderRelatedCarouselRow(index int, title string, cards []ytmapi.
 	for vi, card := range visibleCards {
 		cardIndex := offset + vi
 		t := card.Title
-		
+
 		// Use almost full cardWidth for art to minimize gaps
 		cArtWidth := cardWidth - 2
 		cArtHeight := cArtWidth / 2
@@ -259,14 +259,14 @@ func (m Model) renderRelatedCarouselRow(index int, title string, cards []ytmapi.
 		if maxLen < 3 {
 			maxLen = 3
 		}
-		
+
 		if len(t) > maxLen {
 			t = t[:maxLen-3] + "..."
 		}
 		if card.IsExplicit {
-			t += explicitBadge() 
+			t += explicitBadge()
 		}
-		
+
 		s := homeCardSubtitle(card)
 		if len(s) > maxLen+2 && maxLen+2 > 3 {
 			s = s[:maxLen-1] + "..."

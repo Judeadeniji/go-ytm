@@ -386,7 +386,7 @@ func mapTrackItem(item map[string]any) ytmapi.TrackItem {
 	tr.Title, _ = item["title"].(string)
 	tr.VideoID, _ = item["videoId"].(string)
 	tr.Duration, _ = item["duration"].(string)
-	
+
 	if artists, ok := item["artists"].([]any); ok {
 		for _, a := range artists {
 			if am, ok := a.(map[string]any); ok {
@@ -396,13 +396,13 @@ func mapTrackItem(item map[string]any) ytmapi.TrackItem {
 			}
 		}
 	}
-	
+
 	if album, ok := item["album"].(map[string]any); ok {
 		name, _ := album["name"].(string)
 		id, _ := album["id"].(string)
 		tr.Album = ytmapi.NamedRef{Name: name, ID: id}
 	}
-	
+
 	tr.Thumbnails = mapThumbnails(item)
 	return tr
 }
@@ -524,7 +524,7 @@ func (m Model) generateSearchResultsContent(mainWidth int) string {
 			sub := lipgloss.NewStyle().Foreground(colorSubtext).Background(bg).MaxWidth(subWidth).Render(subStr)
 			titleStyled := lipgloss.NewStyle().Bold(true).Foreground(titleColor).Background(bg).MaxWidth(subWidth).Render(title)
 			info := lipgloss.JoinVertical(lipgloss.Left, titleStyled, sub)
-			
+
 			// Center the text vertically relative to the 3-line tall thumbnail
 			infoPadded := lipgloss.NewStyle().PaddingTop(1).Background(bg).Render(info)
 

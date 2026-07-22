@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-	"log/slog"
 
 	youtube "github.com/kkdai/youtube/v2"
 )
@@ -78,12 +78,12 @@ func (e *Extractor) GetStreamURL(ctx context.Context, videoID string) (string, e
 	start := time.Now()
 	url, primaryErr := e.getStreamURLYoutubeClient(ctx, videoID)
 	duration := time.Since(start)
-	
+
 	if primaryErr == nil && url != "" {
 		slog.Debug("stream extraction success", "video_id", videoID, "duration", duration, "method", "youtubeClient")
 		return url, nil
 	}
-	
+
 	slog.Warn("primary stream extraction failed, trying fallback", "video_id", videoID, "err", primaryErr, "duration", duration)
 
 	if ctx.Err() != nil {
@@ -93,7 +93,7 @@ func (e *Extractor) GetStreamURL(ctx context.Context, videoID string) (string, e
 	startFb := time.Now()
 	url, fallbackErr := e.getStreamURLYtDlp(ctx, videoID)
 	fbDuration := time.Since(startFb)
-	
+
 	if fallbackErr == nil && url != "" {
 		slog.Debug("stream extraction fallback success", "video_id", videoID, "duration", fbDuration, "method", "yt-dlp")
 		return url, nil
@@ -168,9 +168,9 @@ func (e *Extractor) getStreamURLYtDlp(ctx context.Context, videoID string) (stri
 	}
 
 	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-	
+
 	args := []string{"-g", "-f", "bestaudio/bestaudio*/best", "--no-playlist"}
-	
+
 	path := os.ExpandEnv("$HOME/.local/state/go-ytm/headers_auth.json")
 	if data, err := os.ReadFile(path); err == nil {
 		var content map[string]any
@@ -189,7 +189,7 @@ func (e *Extractor) getStreamURLYtDlp(ctx context.Context, videoID string) (stri
 			}
 		}
 	}
-	
+
 	args = append(args, url)
 	cmd := exec.CommandContext(ctx, bin, args...)
 

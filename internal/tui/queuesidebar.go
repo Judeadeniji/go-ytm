@@ -76,7 +76,7 @@ func (m Model) generateQueuePanelContent(width int) string {
 	}
 
 	var sb strings.Builder
-	
+
 	if !m.nowPlayingOpen {
 		sb.WriteString(m.renderRailTabs(inner))
 		sb.WriteString("\n")
@@ -93,7 +93,7 @@ func (m Model) generateQueuePanelContent(width int) string {
 	} else {
 		sb.WriteString(m.renderRailQueue(inner))
 	}
-	
+
 	return sb.String()
 }
 

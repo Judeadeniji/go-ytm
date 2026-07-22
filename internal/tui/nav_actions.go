@@ -3,9 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
-	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/judeadeniji/go-ytm/internal/library"
@@ -481,7 +481,7 @@ func titleCase(s string) string {
 func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 	// Search filter chips
 	for _, f := range []string{"", "songs", "albums", "artists", "playlists", "podcasts", "profiles"} {
-		if m.zone.Get("search_filter_"+f).InBounds(mouse) {
+		if m.zone.Get("search_filter_" + f).InBounds(mouse) {
 			m.searchFilter = f
 			q := m.searchInput.Value()
 			if q == "" {
@@ -498,7 +498,7 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 
 	// Library tab chips
 	for _, f := range []string{"playlists", "songs", "albums", "artists", "downloads"} {
-		if m.zone.Get("lib_tab_"+f).InBounds(mouse) {
+		if m.zone.Get("lib_tab_" + f).InBounds(mouse) {
 			m.libraryTab = f
 			m.listCursor = 0
 			m.homeCardCursor = 0
@@ -514,7 +514,7 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 	// Downloads sub-chips (Playlists | Albums | Songs | Active)
 	if m.activeMenu == "Library" && m.libraryTab == "downloads" {
 		for _, f := range []string{"playlists", "albums", "songs", "active"} {
-			if m.zone.Get("dl_sub_"+f).InBounds(mouse) {
+			if m.zone.Get("dl_sub_" + f).InBounds(mouse) {
 				m.downloadsSubTab = f
 				m.listCursor = 0
 				m.setMainContent()
@@ -591,7 +591,7 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 		if m.activeMoodParams == "" {
 			for _, categories := range m.moodCategories {
 				for _, cat := range categories {
-					if m.zone.Get("mood_"+cat.Params).InBounds(mouse) {
+					if m.zone.Get("mood_" + cat.Params).InBounds(mouse) {
 						m.activeMoodParams = cat.Params
 						m.moodPlaylists = nil
 						m.exploreLoading = true
@@ -612,7 +612,7 @@ func (m Model) handleZoneClick(mouse tea.MouseMsg) (Model, tea.Cmd, bool) {
 		if pid == "" {
 			continue
 		}
-		if m.zone.Get("sidebar_playlist_"+pid).InBounds(mouse) {
+		if m.zone.Get("sidebar_playlist_" + pid).InBounds(mouse) {
 			return m.dispatchZone("open_playlist_"+pid, mapStr(p, "title"), mapStr(p, "description"), "")
 		}
 	}
@@ -938,7 +938,7 @@ func (m Model) toggleDownloadFocused() (tea.Model, tea.Cmd) {
 
 	if isDownloaded {
 		_ = m.sessionStore.RemoveDownload(track.VideoID)
-		
+
 		// Remove from m.libDownloads and get path
 		var path string
 		for i, t := range m.libDownloads {
@@ -948,12 +948,12 @@ func (m Model) toggleDownloadFocused() (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		
+
 		// Delete actual file
 		if path != "" {
 			_ = os.Remove(path)
 		}
-		
+
 		m.setStatus("Removed from downloads: " + track.Title)
 	} else if m.downloadMgr.IsDownloading(track.VideoID) {
 		m.downloadMgr.Cancel(track.VideoID)
@@ -1037,10 +1037,10 @@ func (m Model) downloadAllTracks() (tea.Model, tea.Cmd) {
 						}
 					}
 					tracksToDownload = append(tracksToDownload, library.CachedTrack{
-						VideoID:  videoId,
-						Title:    title,
-						Artist:   artistsStr,
-						Album:    albumStr,
+						VideoID: videoId,
+						Title:   title,
+						Artist:  artistsStr,
+						Album:   albumStr,
 					})
 				}
 			}
@@ -1244,4 +1244,3 @@ func (m Model) downloadFocusedCard() (tea.Model, tea.Cmd) {
 	m.setMainContent()
 	return m, fetchListForDownload(m.ytmapiClient, playlistID, browseID)
 }
-
