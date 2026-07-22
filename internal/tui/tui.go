@@ -2574,7 +2574,6 @@ func (m Model) prevPane() Pane {
 // enqueueVisibleImages fetches thumbs for the active view (home cards, search,
 // playlist/album cover + track thumbs), keyed by size so layout stays stable.
 func (m *Model) enqueueVisibleImages(mainWidth int) tea.Cmd {
-	const maxSearchThumbs = 8
 
 	var cmds []tea.Cmd
 	seen := make(map[string]struct{})

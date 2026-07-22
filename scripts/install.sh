@@ -98,6 +98,14 @@ if [[ -z "$VERSION" ]]; then
 	info "Using release ${VERSION}"
 fi
 
+if [[ -x "$BIN_DIR/ytm" ]]; then
+	CURRENT_VERSION="$("$BIN_DIR/ytm" --version 2>/dev/null | awk '{print $2}')"
+	if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
+		info "ytm is already up to date (${VERSION})"
+		exit 0
+	fi
+fi
+
 info "Installing ytm ${VERSION} (${TARGET}) into ${PREFIX}"
 
 TMP="$(mktemp -d)"
